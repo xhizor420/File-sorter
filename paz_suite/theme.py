@@ -24,6 +24,23 @@ class T:
     ACCENT2      = "#9A6BFF"  # violet — Library identity
     ACCENT2_HOV  = "#B48CFF"
     ACCENT2_DEEP = "#241542"
+    ACCENT3      = "#33D9A8"  # teal — Vault identity
+    ACCENT3_HOV  = "#5CE6BC"
+    ACCENT3_DEEP = "#123D33"
+
+    # Colours cycled to auto-assign each new Vault project its own mark,
+    # distinct from the pink/violet/teal tab identities above so a marked
+    # clip's border never reads as "which tab" instead of "which project".
+    PROJECT_PALETTE = (
+        "#4DA3FF",  # blue
+        "#FFB84D",  # amber
+        "#FF6B4D",  # coral
+        "#B8E64D",  # lime
+        "#4DD9E6",  # cyan
+        "#FFD24D",  # gold
+        "#FF6B8A",  # rose
+        "#8FD9A8",  # sage
+    )
 
     OK        = "#53E0AE"
     OK_DEEP   = "#0E2B22"
@@ -121,4 +138,10 @@ LIBRARY_LABELS = {
     "empty_db":   ("No library yet. Press Sync to build it - the first "
                     "build probes every file, later runs only touch changes."),
     "no_results": "No clips match this search.",
+}
+
+VAULT_LABELS = {
+    "tagline":  "used-clip tracker",
+    "idle":     "Ready",
+    "empty":    "Paste a list of post IDs or filenames above, then press Look up.",
 }

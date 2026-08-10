@@ -1,13 +1,17 @@
 # PAZ Suite
 
-One application, two tabs: **Convert** (batch-encode a source video library
-to MP4, GPU with CPU fallback, then sort by resolution/frame rate) and
+One application, three tabs: **Convert** (batch-encode a source video
+library to MP4, GPU with CPU fallback, then sort by resolution/frame rate),
 **Library** (a browser and search engine over the converted result, with a
-real play/pause/seek/audio player). Previously these were two standalone
-scripts (`paz_studio.py`, `paz_den.py`) that duplicated a large amount of
-infrastructure between them; this is that same functionality combined into
-one maintainable codebase, focused on the two things it's actually for:
-telling you what's in your library and what still needs converting.
+real play/pause/seek/audio player), and **Vault** (paste a list of post IDs
+or filenames to find them in the library, then mark the ones you actually
+used in a named project, so the Library gallery remembers). Convert and
+Library were originally two standalone scripts (`paz_studio.py`,
+`paz_den.py`) that duplicated a large amount of infrastructure between
+them; this is that same functionality combined into one maintainable
+codebase, focused on the three things it's actually for: telling you
+what's in your library, what still needs converting, and what you've
+already spent on a project.
 
 ## What changed from the two standalone scripts
 
@@ -119,6 +123,21 @@ telling you what's in your library and what still needs converting.
   the same YouTube-style frame preview the gallery cards and Convert's
   timeline already had; it was the one scrub surface in the app that
   didn't.
+- **New: the Vault tab.** Grabber downloads and finished edits both leave
+  you with a pile of numeric filenames (`428483.mp4`) and no memory of
+  which ones already went into a project. Paste a list into Vault - post
+  IDs mainly, with a filename-substring fallback for anything that isn't a
+  bare number - and it finds them in the library. Select the ones you
+  actually used, name the project, and press **Mark selected as used**.
+  From then on those clips carry a coloured border in the Library gallery
+  (`used:"project name"` also works as a search term, and a **PROJECTS**
+  group lists every project in the sidebar, click to jump to its clips).
+  A clip can carry marks from more than one project - reused footage
+  across separate edits is normal - and each project gets its own colour,
+  auto-assigned from a fixed palette, so ten different sessions don't
+  blur into one flat "used" indicator. Projects can be renamed or cleared
+  entirely from either the Vault tab or a clip's right-click menu in
+  Library.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the
@@ -145,17 +164,23 @@ done, and the gap check tells you what's converted but not yet upscaled.
 **Promote upscales** moves anything that now meets the bar into the edit
 pool.
 
+**Vault** is the step after you finish an edit — cross-reference the pile
+of clips you actually used against the library and mark them under a
+project name, so the next time you're browsing Library for footage, the
+clips you've already spent on a past project are visibly marked instead
+of getting mixed back into the pool of ones you haven't used yet.
+
 ## Interface
 
-A slim shared header (suite branding) sits above the Convert/Library tab
-strip. The tab strip itself recolours to match whichever tab is active
-(pink for Convert, violet for Library) instead of staying one flat,
-generic control regardless of which tab is showing, and each tab's own
-hero panels (Convert's queue table and controls card; Library's gallery
-shell, detail card and tag sidebar) carry a matching accent-tinted
-border instead of the same neutral grey everywhere - the two tabs read
-as differently-identified places, not one layout wearing two labels.
-Each tab's own top area is two rows: a browsing row (brand, search,
+A slim shared header (suite branding) sits above the Convert/Library/Vault
+tab strip. The tab strip itself recolours to match whichever tab is active
+(pink for Convert, violet for Library, teal for Vault) instead of staying
+one flat, generic control regardless of which tab is showing, and each
+tab's own hero panels (Convert's queue table and controls card; Library's
+gallery shell, detail card and tag sidebar) carry a matching accent-tinted
+border instead of the same neutral grey everywhere - the tabs read as
+differently-identified places, not one layout wearing three labels.
+Convert and Library's own top areas are two rows: a browsing row (brand, search,
 rating/sort) and, underneath it, an action toolbar - maintenance actions
 (Sync, Fix missing, Fetch tags / Scan, Start) on the left, configuration
 (Settings, Help) on the right. The standalone Folders button is gone;
@@ -218,10 +243,11 @@ paz_suite/
   convert_engine.py         encode planning + ffmpeg command/run/verify (no UI)
   convert_widgets.py        queue table, scrub/play preview, contact sheet, dupe finder
   convert_tab.py            the Convert tab
-  library_db.py             SQLite schema, search parser (no UI)
+  library_db.py             SQLite schema, search parser, Vault mark helpers (no UI)
   library_player.py         the embedded clip player (thin UI over player_engine)
   library_windows.py        hidden tags, help, folders, integrity verifier
   library_tab.py            the Library tab
+  vault_tab.py              the Vault tab: paste-lookup, marking, project management
   settings_window.py        the one settings dialog
   app.py                    window shell, tab switcher, shared keyboard dispatch
 ```

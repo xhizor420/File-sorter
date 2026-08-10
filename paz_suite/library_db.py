@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import shlex
 import sqlite3
+import time
 from dataclasses import dataclass, field
 
 from .config import DB_PATH
@@ -25,6 +27,17 @@ CREATE TABLE IF NOT EXISTS files (
     height   INTEGER,
     fps      REAL
 );
+CREATE TABLE IF NOT EXISTS vault_projects (
+    name       TEXT PRIMARY KEY,
+    color      TEXT,
+    created_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS vault_marks (
+    path      TEXT NOT NULL,
+    project   TEXT NOT NULL,
+    marked_at INTEGER,
+    PRIMARY KEY (path, project)
+);
 """
 
 
@@ -35,6 +48,8 @@ def db_connect() -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.executescript(SCHEMA)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_files_pid ON files(pid)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_path ON vault_marks(path)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_vault_marks_project ON vault_marks(project)")
     return conn
 
 
@@ -65,6 +80,12 @@ class Rec:
     # time instead of on every tag-panel and detail-panel render - the
     # difference is real once a library runs into five figures of clips.
     named: frozenset = field(default_factory=frozenset)
+    # Vault marks: which project(s) this clip has been used in, filled in
+    # at load time from vault_marks. used_color is the most-recently-marked
+    # project's colour (a clip can be marked in more than one), used for
+    # the gallery border - the rest are still listed in used_projects.
+    used_projects: list = field(default_factory=list)
+    used_color: str = ""
 
     def compute_named(self) -> None:
         self.named = frozenset(self.artists) | frozenset(self.characters) \
@@ -90,9 +111,20 @@ class Rec:
 
 
 def parse_query(text: str) -> tuple:
-    """Split an e621-style query into include / exclude term lists."""
+    """
+    Split an e621-style query into include / exclude term lists.
+
+    Mostly plain whitespace splitting, except a value can be quoted
+    ("used:\"summer pmv\"") to hold spaces - project names in particular
+    are free text, not tag-shaped. shlex handles that; a stray unmatched
+    quote just falls back to plain splitting instead of erroring out.
+    """
+    try:
+        raw_tokens = shlex.split(text)
+    except ValueError:
+        raw_tokens = text.split()
     includes, excludes = [], []
-    for token in text.split():
+    for token in raw_tokens:
         target = includes
         if token.startswith("-") and len(token) > 1:
             target = excludes
@@ -102,7 +134,7 @@ def parse_query(text: str) -> tuple:
             kind, _, value = token.partition(":")
             if kind in ("artist", "character", "species", "copyright",
                         "series", "lore", "rating", "folder", "id",
-                        "is") and value:
+                        "is", "used") and value:
                 target.append((kind, value))
                 continue
         target.append(("tag", token))
@@ -146,6 +178,10 @@ def term_hits(rec: Rec, kind: str, value: str) -> bool:
         return value in rec.folder.lower()
     if kind == "id":
         return rec.pid == value
+    if kind == "used":
+        if value in ("", "any"):
+            return bool(rec.used_projects)
+        return any(value == p.lower() for p in rec.used_projects)
     # plain tag term
     if "*" in value:
         return any(fnmatch.fnmatch(t, value) for t in rec.tags)
@@ -174,3 +210,76 @@ SORTS = {
     "Largest": lambda r: -r.size,
     "Score":   lambda r: (-r.score, r.name.lower()),
 }
+
+
+# ── Vault: "used in project X" marks ────────────────────────────────────
+#
+# A clip can be marked as used in any number of named projects - reused
+# footage across separate PMVs is normal, so this is deliberately a
+# many-to-many relationship (vault_marks) rather than one field on the
+# clip. Colour assignment lives with the caller (the Vault tab), not
+# here, so this module stays UI-free.
+
+def vault_ensure_project(conn: sqlite3.Connection, name: str, color: str) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO vault_projects (name, color, created_at) VALUES (?,?,?)",
+        (name, color, int(time.time())))
+    conn.commit()
+
+
+def vault_mark(conn: sqlite3.Connection, paths, project: str) -> None:
+    now = int(time.time())
+    conn.executemany(
+        "INSERT OR REPLACE INTO vault_marks (path, project, marked_at) VALUES (?,?,?)",
+        [(path, project, now) for path in paths])
+    conn.commit()
+
+
+def vault_unmark(conn: sqlite3.Connection, path: str, project: str) -> None:
+    conn.execute("DELETE FROM vault_marks WHERE path=? AND project=?", (path, project))
+    conn.commit()
+
+
+def vault_clear_project(conn: sqlite3.Connection, project: str) -> None:
+    conn.execute("DELETE FROM vault_marks WHERE project=?", (project,))
+    conn.execute("DELETE FROM vault_projects WHERE name=?", (project,))
+    conn.commit()
+
+
+def vault_rename_project(conn: sqlite3.Connection, old: str, new: str) -> None:
+    if old == new or not new:
+        return
+    existing = conn.execute(
+        "SELECT color FROM vault_projects WHERE name=?", (new,)).fetchone()
+    if existing is None:
+        conn.execute("UPDATE vault_projects SET name=? WHERE name=?", (new, old))
+    else:
+        # Renaming onto an existing project merges into it instead of
+        # colliding on the (path, project) primary key.
+        conn.execute("DELETE FROM vault_projects WHERE name=?", (old,))
+    conn.execute(
+        "INSERT OR IGNORE INTO vault_marks (path, project, marked_at) "
+        "SELECT path, ?, marked_at FROM vault_marks WHERE project=?", (new, old))
+    conn.execute("DELETE FROM vault_marks WHERE project=?", (old,))
+    conn.commit()
+
+
+def vault_projects_list(conn: sqlite3.Connection) -> list:
+    """[(name, color, clip_count, created_at), ...], newest project first."""
+    rows = conn.execute(
+        "SELECT p.name, p.color, p.created_at, COUNT(m.path) "
+        "FROM vault_projects p LEFT JOIN vault_marks m ON m.project = p.name "
+        "GROUP BY p.name ORDER BY p.created_at DESC").fetchall()
+    return [(name, color, count, created_at) for name, color, created_at, count in rows]
+
+
+def vault_marks_by_path(conn: sqlite3.Connection) -> dict:
+    """path -> [(project, color, marked_at), ...], most-recent mark first."""
+    rows = conn.execute(
+        "SELECT m.path, m.project, p.color, m.marked_at FROM vault_marks m "
+        "JOIN vault_projects p ON p.name = m.project "
+        "ORDER BY m.marked_at DESC").fetchall()
+    by_path: dict = {}
+    for path, project, color, marked_at in rows:
+        by_path.setdefault(path, []).append((project, color, marked_at))
+    return by_path

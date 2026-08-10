@@ -26,7 +26,10 @@ from .files import (
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key, make_thumb, probe
 from .e621 import E621_POST
-from .library_db import db_connect, Rec, parse_query, rec_matches, SORTS
+from .library_db import (
+    db_connect, Rec, parse_query, rec_matches, SORTS,
+    vault_marks_by_path, vault_unmark, vault_projects_list, vault_ensure_project, vault_mark,
+)
 from .library_player import InlinePlayer
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
@@ -53,6 +56,7 @@ class LibraryTab(ctk.CTkFrame):
         self.by_path: dict = {}
         self.tag_universe: set = set()
         self.filtered: list[Rec] = []
+        self._project_colors: dict = {}
         self.page = 0
         self.selected: Rec | None = None
 
@@ -741,6 +745,9 @@ class LibraryTab(ctk.CTkFrame):
         rows = conn.execute(
             "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
             "FROM files").fetchall()
+        vault_marks = vault_marks_by_path(conn)
+        self._project_colors = {name: color for name, color, _n, _t
+                                in vault_projects_list(conn)}
         conn.close()
         self.records = []
         self.by_path = {}
@@ -779,6 +786,10 @@ class LibraryTab(ctk.CTkFrame):
                 rec.compute_named()
             rec.premium = (rec.height >= 2000
                            or rec.name in premium.get(rec.folder, ()))
+            marks = vault_marks.get(rec.path)
+            if marks:
+                rec.used_projects = [project for project, _color, _t in marks]
+                rec.used_color = marks[0][1]   # most-recent mark, per vault_marks_by_path
             self.records.append(rec)
             self.by_path[rec.path] = rec
         if hasattr(self, "fix_btn"):
@@ -914,12 +925,16 @@ class LibraryTab(ctk.CTkFrame):
             self.run_search()
             return
         token = ("-" if negative else "") + token
-        tokens = self.search.get().split()
-        if token in tokens:
+        current = self.search.get()
+        # A quoted token (used:"...") can hold a space, so a plain
+        # whitespace split can't reliably detect "already there" - a
+        # substring check is enough for that, without needing the full
+        # shlex-aware parser just to de-duplicate.
+        if token in current.split() or token in current:
             return
-        tokens.append(token)
+        text = (current + " " + token).strip() if current.strip() else token
         self.search.delete(0, tk.END)
-        self.search.insert(0, " ".join(tokens))
+        self.search.insert(0, text)
         self.run_search()
 
     def hide_tag(self, name: str):
@@ -953,6 +968,7 @@ class LibraryTab(ctk.CTkFrame):
         series = collections.Counter()
         lore = collections.Counter()
         other = collections.Counter()
+        projects = collections.Counter()
         for rec in self.filtered:
             artists.update(rec.artists)
             characters.update(rec.characters)
@@ -960,6 +976,7 @@ class LibraryTab(ctk.CTkFrame):
             series.update(rec.copyrights)
             lore.update(rec.lore)
             other.update(t for t in rec.tags if t not in rec.named)
+            projects.update(rec.used_projects)
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
@@ -996,6 +1013,33 @@ class LibraryTab(ctk.CTkFrame):
                 label.grid(row=row, column=0, sticky="ew", padx=6, pady=1)
                 label.bind("<Button-3>", lambda e, t=token, n=name: self._tag_menu(e, t, n))
                 row += 1
+
+        # PROJECTS gets its own block instead of the loop above - project
+        # names are free text (can hold spaces), so the search token needs
+        # quoting, and each one gets its own Vault-assigned colour rather
+        # than one fixed colour for the whole group.
+        if projects:
+            key = "projects"
+            open_now = self.cfg.sidebar_group_open.get(key, True)
+            header = ctk.CTkButton(
+                self.tagpanel,
+                text=("▾  " if open_now else "▸  ") + f"PROJECTS   {len(projects)}",
+                height=26, corner_radius=6, font=font(10, "bold"), anchor="w",
+                fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
+                command=lambda k=key: self._toggle_sidebar_group(k))
+            header.grid(row=row, column=0, sticky="ew", padx=8,
+                        pady=(10 if row else 6, 2))
+            row += 1
+            if open_now:
+                for name, count in projects.most_common(60):
+                    colour = self._project_colors.get(name, T.DIM)
+                    label = ctk.CTkButton(
+                        self.tagpanel, text=f"{name}   {count}", height=27,
+                        corner_radius=5, font=font(12), anchor="w",
+                        fg_color="transparent", hover_color=T.BTN_HOV, text_color=colour,
+                        command=lambda n=name: self.add_token(f'used:"{n}"'))
+                    label.grid(row=row, column=0, sticky="ew", padx=6, pady=1)
+                    row += 1
         if hidden:
             ctk.CTkButton(self.tagpanel,
                          text=f"{len(hidden)} hidden tag{'s' if len(hidden) != 1 else ''} "
@@ -1137,6 +1181,13 @@ class LibraryTab(ctk.CTkFrame):
                                 fill=T.INPUT, outline="", tags=(tag, "well"))
         canvas.create_text(x + self.CARD_W // 2, y + self.IMG_H // 2, text="…",
                            fill=T.FAINT, font=(T.UI, 11), tags=(tag, f"ph{index}"))
+        if rec.used_projects:
+            # A clip already spent on a project stays visibly marked in the
+            # gallery - the colour is that project's own, so different
+            # sessions read as different marks instead of one flat "used".
+            canvas.create_rectangle(x + 1, y + 1, x + self.CARD_W - 1, y + self.IMG_H - 1,
+                                    outline=rec.used_color, width=3,
+                                    tags=(tag, f"used{index}"))
 
         canvas.create_rectangle(x, y + self.IMG_H + 2, x + self.CARD_W, y + self.IMG_H + 5,
                                 outline="", fill=self._bar_colour(rec, hover=False),
@@ -1245,6 +1296,8 @@ class LibraryTab(ctk.CTkFrame):
         canvas.create_text(bx - pad, by - 2, text=text, fill=T.TEXT, font=(T.MONO, 8),
                            anchor="se", tags=(slot["tag"],))
         canvas.tag_raise(f"bar{index}")
+        if rec.used_projects:
+            canvas.tag_raise(f"used{index}")
 
     # ── hover scrub ─────────────────────────────────────────────────────────
 
@@ -1368,6 +1421,8 @@ class LibraryTab(ctk.CTkFrame):
             bits.append("4K available ✓")
         if rec.pid:
             bits.append(f"#{rec.pid}")
+        if rec.used_projects:
+            bits.append("used: " + ", ".join(rec.used_projects))
         self.detail_meta.configure(text="  ·  ".join(bits))
 
         groups = [
@@ -1461,6 +1516,25 @@ class LibraryTab(ctk.CTkFrame):
             menu.add_command(label=f"Open e621 post #{rec.pid}",
                              command=lambda: self._open_url(rec))
         menu.add_separator()
+
+        used_menu = tk.Menu(menu, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
+                            activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
+                            bd=0, font=(T.UI, 10))
+        conn = db_connect()
+        try:
+            projects = vault_projects_list(conn)
+        finally:
+            conn.close()
+        for name, _color, _count, _created in projects:
+            if name in rec.used_projects:
+                continue
+            used_menu.add_command(label=name, command=lambda n=name: self._mark_used(rec, n))
+        used_menu.add_command(label="New project…", command=lambda: self._mark_used_new(rec))
+        menu.add_cascade(label="Mark as used…", menu=used_menu)
+        for name in rec.used_projects:
+            menu.add_command(label=f"Remove from '{name}'",
+                             command=lambda n=name: self._unmark_used(rec, n))
+        menu.add_separator()
         copy_menu = tk.Menu(menu, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
                             activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
                             bd=0, font=(T.UI, 10))
@@ -1509,6 +1583,49 @@ class LibraryTab(ctk.CTkFrame):
             webbrowser.open(url)
         except Exception:
             self._copy(url)
+
+    # ── Vault marks (right-click "used in a project") ───────────────────
+
+    def _mark_used(self, rec: Rec, project: str) -> None:
+        conn = db_connect()
+        try:
+            vault_mark(conn, [rec.path], project)
+        finally:
+            conn.close()
+        self._resync_after_vault_change(rec.path)
+        self.set_status(f"Marked as used in '{project}'.", T.OK)
+
+    def _mark_used_new(self, rec: Rec) -> None:
+        dialog = ctk.CTkInputDialog(text="Name this project:", title="Mark as used")
+        name = (dialog.get_input() or "").strip()
+        if not name:
+            return
+        conn = db_connect()
+        try:
+            existing = len(vault_projects_list(conn))
+            vault_ensure_project(conn, name, T.PROJECT_PALETTE[existing % len(T.PROJECT_PALETTE)])
+        finally:
+            conn.close()
+        self._mark_used(rec, name)
+
+    def _unmark_used(self, rec: Rec, project: str) -> None:
+        conn = db_connect()
+        try:
+            vault_unmark(conn, rec.path, project)
+        finally:
+            conn.close()
+        self._resync_after_vault_change(rec.path)
+        self.set_status(f"Removed from '{project}'.", T.OK)
+
+    def _resync_after_vault_change(self, path: str) -> None:
+        """_load_library() rebuilds every Rec fresh, so self.selected (if
+        it's the clip that was just marked/unmarked) would otherwise keep
+        pointing at the old, now-stale copy until re-clicked."""
+        self._load_library()
+        self.run_search()
+        if self.selected and self.selected.path == path:
+            self.selected = self.by_path.get(path)
+            self._render_details()
 
     # ── sync (incremental index build) ──────────────────────────────────────
 

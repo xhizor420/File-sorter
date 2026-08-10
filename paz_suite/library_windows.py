@@ -109,10 +109,19 @@ class HelpWindow(ctk.CTkToplevel):
         ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
          "selected clip. Click any frame to jump the player there."),
         ("Search", "Terms AND together, -term excludes. Prefixes: artist: "
-         "character: species: rating: folder: id: is:. Wildcards: dragon*. "
-         "is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "
-         "is:square are the useful specials. Click a tag to add it; "
-         "right-click for exclude/hide."),
+         "character: species: rating: folder: id: is: used:. Wildcards: "
+         "dragon*. is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "
+         "is:square are the useful specials; used:\"project name\" (quotes "
+         "for names with spaces) finds clips marked used in the Vault tab. "
+         "Click a tag to add it; right-click for exclude/hide."),
+        ("Vault", "A separate tab for the moment after you finish an edit: "
+         "paste a list of post IDs or filenames, it finds them in the "
+         "library, and you mark the ones you actually used under a project "
+         "name. Marked clips get a coloured border here in the gallery - a "
+         "different colour per project, and a clip can carry marks from "
+         "more than one - so browsing later shows at a glance what's "
+         "already been spent. The PROJECTS group in the sidebar lists every "
+         "project; click one to jump straight to its clips."),
         ("Player", "Scales with the window; Theater mode (Ctrl+T) gives it "
          "about half the window and collapses the tag rail."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
