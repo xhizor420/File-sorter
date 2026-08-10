@@ -321,7 +321,8 @@ class LibraryTab(ctk.CTkFrame):
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k"),
                 ("portrait", "📱 Portrait", "is:portrait"),
-                ("widescreen", "🖥 Widescreen", "is:widescreen")):
+                ("widescreen", "🖥 Widescreen", "is:widescreen"),
+                ("square", "◻ Square", "is:square")):
             chip = ctk.CTkButton(left, text=text, height=22, width=92,
                                  corner_radius=11, font=font(9),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
@@ -773,13 +774,14 @@ class LibraryTab(ctk.CTkFrame):
             "no4k": sum(1 for r in self.records if not r.premium),
             "portrait": sum(1 for r in self.records if r.orientation == "portrait"),
             "widescreen": sum(1 for r in self.records if r.orientation == "widescreen"),
+            "square": sum(1 for r in self.records if r.orientation == "square"),
         }
         for key, (chip, label) in self.quick_chips.items():
             count = counts.get(key)
             if count is None:
                 continue
             chip.configure(text=f"{label} ({count})")
-            if key in ("untagged", "noid", "portrait", "widescreen") and count == 0:
+            if key in ("untagged", "noid", "portrait", "widescreen", "square") and count == 0:
                 chip.configure(text_color=T.FAINT, state="disabled")
             else:
                 chip.configure(text_color=T.DIM, state="normal")
