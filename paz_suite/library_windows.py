@@ -164,7 +164,13 @@ class HelpWindow(ctk.CTkToplevel):
         ("Fetch e621 tags", "Just the tag half of Fix missing: resolves post "
          "IDs (the filename numbers) into artist / character / species / "
          "rating via e621's API. Add your API key in Settings for fewer "
-         "unavailable posts."),
+         "unavailable posts. Every run also quietly soft-refreshes a small "
+         "batch of already-tagged posts that are due for a recheck - "
+         "recently-posted clips get rechecked every few days for new "
+         "votes/tags, old ones every few months, so scores stay current "
+         "without ever re-fetching the whole library at once. Right-click "
+         "for a bigger on-demand catch-up pass; tune the batch size in "
+         "Settings > Library."),
         ("Picks", "A shortlist for whatever you're doing next - editing, "
          "reviewing, exporting. Press P on a clip (or right-click > Add to "
          "Picks), collect as many as you want, then Copy paths or Export "
@@ -179,10 +185,16 @@ class HelpWindow(ctk.CTkToplevel):
          "every card. Sort by it with the Top rated chip, or the Score sort."),
         ("4K ✓", "Shown when a 4K/60+ copy of that exact file exists in the "
          "premium folder (or the clip itself is 4K). Search it with is:4k."),
+        ("Portrait / Widescreen", "Aspect ratio isn't usually a tag, so it's "
+         "handled separately: is:portrait (phone-shaped, tall) and "
+         "is:widescreen (landscape) are computed straight from each clip's "
+         "resolution, with quick chips for both - a fast way to pull "
+         "clips that match your edit's output orientation."),
         ("Search", "Terms AND together. -term excludes. Prefixes: artist: "
          "character: species: rating: folder: id: is:. Wildcards: dragon*. "
-         "is:untagged, is:noid, is:4k are the useful specials. Click any tag "
-         "anywhere to add it; right-click for exclude/hide."),
+         "is:untagged, is:noid, is:4k, is:portrait, is:widescreen are the "
+         "useful specials. Click any tag anywhere to add it; right-click "
+         "for exclude/hide."),
         ("Viewer size", "The player scales with the window. Theater mode "
          "(Ctrl+T, or the button above the viewer) gives it about half the "
          "window and collapses the tag rail for close inspection."),

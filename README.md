@@ -53,12 +53,30 @@ telling you what's in your library and what still needs converting.
   several decodes in parallel in the background, is cancellable, and
   reports anything broken with a show-in-folder/delete action. Nothing is
   touched unless you delete a result yourself.
-- Two changes aimed specifically at libraries in the five-figure range and
-  growing: the media-probe cache is now a bounded LRU (25,000 entries)
-  instead of a dict that got wiped entirely every 8,000 probes, and each
-  clip's artist/character/species/copyright/lore names are unioned once
-  when the library loads instead of being rebuilt from scratch on every
-  search keystroke and every clip you select.
+- Three changes aimed specifically at libraries in the five-figure range
+  and growing: the media-probe cache is now a bounded LRU (60,000 entries
+  by default) instead of a dict that got wiped entirely every 8,000
+  probes; each clip's artist/character/species/copyright/lore names are
+  unioned once when the library loads instead of being rebuilt from
+  scratch on every search keystroke and every clip you select; and both
+  cache sizes are now tunable in **Settings → Library → Performance**
+  instead of fixed constants, so they can keep growing as your library
+  does.
+- **Soft tag refresh.** Previously a post's tags/score were fetched once
+  and never touched again. Every **Fetch e621 tags** run now also folds
+  in a small, bounded batch of already-cached posts that are "due" for a
+  recheck - recently-posted clips get rechecked every few days (still
+  gaining votes/tags), clips from old, settled posts every few months -
+  so scores and tags stay roughly current without ever re-fetching a
+  13,000-post library in one pass. The batch size is tunable (`Settings →
+  Library`, default 40/run); right-click **Fetch e621 tags** for a bigger
+  on-demand catch-up pass.
+- **Portrait / Widescreen quick filters.** Aspect ratio isn't usually an
+  e621 tag, so it's handled separately: `is:portrait` and `is:widescreen`
+  are computed directly from each clip's resolution, with quick chips for
+  both, next to `is:4k` — a fast way to pull only phone-shaped or only
+  landscape footage when you're picking clips for an edit with a fixed
+  output orientation.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the

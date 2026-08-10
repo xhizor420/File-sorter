@@ -54,9 +54,19 @@ class MediaInfo:
         return f"{self.fps:.2f}".rstrip("0").rstrip(".") if self.fps else "--"
 
 
-_PROBE_CACHE_LIMIT = 25000    # a growing library shouldn't keep re-probing
+_PROBE_CACHE_LIMIT = 60000    # a growing library shouldn't keep re-probing;
+                               # raise via AppConfig.probe_cache_limit
 _probe_cache: "OrderedDict" = OrderedDict()
 _probe_lock = threading.Lock()
+
+
+def set_probe_cache_limit(limit: int) -> None:
+    """Applied once at startup from AppConfig.probe_cache_limit."""
+    global _PROBE_CACHE_LIMIT
+    _PROBE_CACHE_LIMIT = max(int(limit), 500)
+    with _probe_lock:
+        while len(_probe_cache) > _PROBE_CACHE_LIMIT:
+            _probe_cache.popitem(last=False)
 
 
 def _parse_rate(value: str) -> float:
@@ -262,7 +272,7 @@ class ThumbCache:
     identical ones.
     """
 
-    def __init__(self, limit: int = 12000, subdir: str = "paz_frames"):
+    def __init__(self, limit: int = 30000, subdir: str = "paz_frames"):
         self.root = os.path.join(tempfile.gettempdir(), subdir)
         self.limit = limit
         self._lock = threading.Lock()

@@ -70,6 +70,24 @@ class Rec:
         self.named = frozenset(self.artists) | frozenset(self.characters) \
             | frozenset(self.species) | frozenset(self.copyrights) | frozenset(self.lore)
 
+    @property
+    def orientation(self) -> str:
+        """
+        "portrait" / "widescreen" / "square", derived from width x height.
+
+        Not an e621 tag - almost nobody tags aspect ratio - but a real,
+        fast way to browse "phone footage" vs. "widescreen footage" when
+        picking clips for an edit with a fixed output orientation.
+        """
+        if not self.width or not self.height:
+            return ""
+        ratio = self.width / self.height
+        if ratio <= 0.85:
+            return "portrait"
+        if ratio >= 1.2:
+            return "widescreen"
+        return "square"
+
 
 def parse_query(text: str) -> tuple:
     """Split an e621-style query into include / exclude term lists."""
@@ -105,6 +123,12 @@ def term_hits(rec: Rec, kind: str, value: str) -> bool:
             return rec.premium
         if value in ("no4k", "sd"):
             return not rec.premium
+        if value in ("portrait", "phone", "vertical"):
+            return rec.orientation == "portrait"
+        if value in ("widescreen", "landscape", "horizontal"):
+            return rec.orientation == "widescreen"
+        if value == "square":
+            return rec.orientation == "square"
         return False
     if kind == "artist":
         return any(value == a or fnmatch.fnmatch(a, value) for a in rec.artists)

@@ -287,6 +287,25 @@ class SettingsWindow(ctk.CTkToplevel):
         self._section(tab, "Tagging", 12)
         self._switch(tab, 13, "library_autofetch",
                     "Fetch missing tags automatically after a sync")
+        self._number(tab, 14, "library_stale_refresh_budget",
+                    "Soft-refresh budget per fetch", 0, 2000)
+        self._hint(tab, 15, "Every tag fetch also quietly re-checks up to this "
+                           "many already-tagged posts that are \"due\" - fresh "
+                           "posts get re-checked every few days for new votes/"
+                           "tags, old ones every few months - so scores stay "
+                           "current without ever re-fetching the whole library "
+                           "at once. 0 turns this off (right-click Fetch e621 "
+                           "tags still lets you force a bigger catch-up pass).")
+
+        self._section(tab, "Performance", 16)
+        self._number(tab, 17, "probe_cache_limit", "ffprobe results cached", 2000, 500000)
+        self._hint(tab, 18, "In-memory only, a few hundred bytes each - raise "
+                           "this as your library grows so browsing doesn't "
+                           "keep re-reading files ffprobe already looked at.")
+        self._number(tab, 19, "frame_cache_limit", "Scrub/hover frames cached", 500, 200000)
+        self._hint(tab, 20, "On-disk JPEGs in your temp folder, a few KB each "
+                           "- this is the hover-preview/scrub cache, separate "
+                           "from the permanent one-per-clip gallery thumbnails.")
 
     def _change_library_folders(self):
         library = getattr(self.app, "library", None)

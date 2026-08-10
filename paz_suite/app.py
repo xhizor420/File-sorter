@@ -15,7 +15,7 @@ from PIL import Image, ImageTk
 from .theme import T, paw_photo
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
-from .media import ThumbCache
+from .media import ThumbCache, set_probe_cache_limit
 from .widgets import Toaster, PeekWindow
 from .convert_tab import ConvertTab
 from .library_tab import LibraryTab
@@ -30,7 +30,8 @@ class PazApp:
         self.root = root
         self.cfg = AppConfig.load()
         self.emeta = E621Meta()
-        self.cache = ThumbCache()          # shared frame/thumbnail cache
+        set_probe_cache_limit(self.cfg.probe_cache_limit)
+        self.cache = ThumbCache(limit=self.cfg.frame_cache_limit)  # shared frame/thumbnail cache
         self.toaster = Toaster(root)
         self.peek = PeekWindow(root)
         self._icon_paw = None
@@ -118,6 +119,8 @@ class PazApp:
 
     def on_settings_saved(self) -> None:
         self._apply_chrome()
+        set_probe_cache_limit(self.cfg.probe_cache_limit)
+        self.cache.limit = self.cfg.frame_cache_limit
         self.convert.after_settings_saved()
         self.library.after_settings_saved()
 

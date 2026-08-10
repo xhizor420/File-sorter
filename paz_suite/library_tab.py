@@ -196,6 +196,9 @@ class LibraryTab(ctk.CTkFrame):
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self._fetch_tags)
         self.fetch_btn.pack(side="left", padx=(0, 8))
+        # Right-click for a bigger, on-demand soft-refresh pass - every
+        # regular fetch already folds in a small one automatically.
+        self.fetch_btn.bind("<Button-3>", self._fetch_menu)
 
         self.sync_btn = ctk.CTkButton(
             right, text="Sync library", width=110, height=30, corner_radius=7,
@@ -293,6 +296,8 @@ class LibraryTab(ctk.CTkFrame):
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k"),
+                ("portrait", "📱 Portrait", "is:portrait"),
+                ("widescreen", "🖥 Widescreen", "is:widescreen"),
                 ("top", "Top rated", "sort:score")):
             chip = ctk.CTkButton(left, text=text, height=22, width=92,
                                  corner_radius=11, font=font(9),
@@ -742,6 +747,8 @@ class LibraryTab(ctk.CTkFrame):
             "noid": sum(1 for r in self.records if not r.pid),
             "4k": sum(1 for r in self.records if r.premium),
             "no4k": sum(1 for r in self.records if not r.premium),
+            "portrait": sum(1 for r in self.records if r.orientation == "portrait"),
+            "widescreen": sum(1 for r in self.records if r.orientation == "widescreen"),
             "top": None,
         }
         for key, (chip, label) in self.quick_chips.items():
@@ -749,7 +756,7 @@ class LibraryTab(ctk.CTkFrame):
             if count is None:
                 continue
             chip.configure(text=f"{label} ({count})")
-            if key in ("untagged", "noid") and count == 0:
+            if key in ("untagged", "noid", "portrait", "widescreen") and count == 0:
                 chip.configure(text_color=T.FAINT, state="disabled")
             else:
                 chip.configure(text_color=T.DIM, state="normal")
@@ -1888,7 +1895,28 @@ class LibraryTab(ctk.CTkFrame):
         if more_tags and self.cfg.e621_enabled:
             self._fetch_tags()
 
-    def _fetch_tags(self):
+    def _fetch_menu(self, event):
+        menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
+                       activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
+                       bd=0, font=(T.UI, 10))
+        menu.add_command(label="Refresh stale tags now (up to 300)…",
+                         command=self._refresh_stale_now)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _fetch_tags(self, extra_budget: int | None = None):
+        """
+        Fetch every uncached post ID, then quietly fold in a bounded batch
+        of already-cached posts that are "due" for a soft refresh (see
+        E621Meta.is_stale) - fresh posts recheck every few days, old ones
+        every few months, so scores/tags stay roughly current without ever
+        re-fetching the whole library in one pass.
+
+        `extra_budget` overrides the configured ambient amount - used for
+        the manual "refresh stale now" catch-up.
+        """
         if self.busy:
             return
         if not self.cfg.e621_enabled:
@@ -1897,19 +1925,33 @@ class LibraryTab(ctk.CTkFrame):
             return
         seen = set()
         todo = []
+        all_pids = []
         for rec in self.records:
-            if rec.pid and rec.pid not in seen and self.emeta.get(rec.pid) is None:
+            if not rec.pid:
+                continue
+            all_pids.append(rec.pid)
+            if rec.pid not in seen and self.emeta.get(rec.pid) is None:
                 seen.add(rec.pid)
                 todo.append(rec.pid)
+
+        budget = (extra_budget if extra_budget is not None
+                 else self.cfg.library_stale_refresh_budget)
+        refreshing = self.emeta.due_for_refresh(all_pids, budget, exclude=todo)
+        todo.extend(refreshing)
+
         if not todo:
-            self.set_status("Every post ID is already tagged or cached.", T.OK)
+            self.set_status("Every post ID is already tagged or cached, and "
+                            "nothing is due for a refresh yet.", T.OK)
             return
         self.busy = True
         self.fetch_btn.configure(state="disabled")
         self.fix_btn.configure(state="disabled")
         delay = max(float(self.cfg.e621_fetch_delay), 0.5)
-        self.set_status(f"{self.F('fetching')} · {len(todo)} posts "
-                        f"(~{fmt_len(len(todo) * (delay + 0.1))})", T.ACCENT2)
+        status = f"{self.F('fetching')} · {len(todo)} posts"
+        if refreshing:
+            status += f" ({len(refreshing)} refreshed for freshness)"
+        status += f" (~{fmt_len(len(todo) * (delay + 0.1))})"
+        self.set_status(status, T.ACCENT2)
         self.progress.set(0)
 
         def work():
@@ -1936,13 +1978,27 @@ class LibraryTab(ctk.CTkFrame):
                 self.busy = False
                 self.ui(self.fetch_btn.configure, state="normal")
                 self.ui(self.fix_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, miss)
+                self.ui(self._fetch_done, hits, miss, len(refreshing))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _fetch_done(self, hits: int, miss: int):
+    def _fetch_done(self, hits: int, miss: int, refreshed: int = 0):
         self._load_library()
         self.run_search()
         self._render_details()
-        self.set_status(f"Tags fetched: {hits} tagged · {miss} unavailable",
+        extra = f" · {refreshed} refreshed" if refreshed else ""
+        self.set_status(f"Tags fetched: {hits} tagged · {miss} unavailable{extra}",
                         T.OK if hits else T.WARN)
+
+    def _refresh_stale_now(self):
+        if not self.records:
+            self.set_status("Nothing to refresh yet - sync the library first.", T.WARN)
+            return
+        if not messagebox.askyesno(
+                "Refresh stale tags",
+                "Force a bigger catch-up pass now, re-checking up to 300 "
+                "already-tagged posts that are due for a refresh (instead "
+                "of the small amount folded into every regular fetch)?",
+                parent=self.root):
+            return
+        self._fetch_tags(extra_budget=300)

@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 
 from .config import CONFIG_DIR, E621_META_PATH
 
@@ -29,6 +31,38 @@ E621_UA = f"{APP_NAME}/{APP_VERSION} (personal library tagger)"
 # Artist-category tags that aren't actually artists.
 _ARTIST_NOISE = {"conditional_dnp", "avoid_posting", "unknown_artist",
                   "sound_warning", "epilepsy_warning", "third-party_edit"}
+
+# ── soft refresh schedule ──────────────────────────────────────────────────
+#
+# A post's score and tags mostly move while it's new; a post from years ago
+# has effectively stopped changing. (post_age_days, recheck_every_days) -
+# first matching age band wins. Applied against how old the POST is on
+# e621, not how long it's been in the local library, so a freshly-uploaded
+# clip you tagged last year still gets checked often if the post itself is
+# recent.
+_REFRESH_SCHEDULE = (
+    (30, 3),      # under a month old: recheck every 3 days
+    (180, 14),    # under half a year: every 2 weeks
+    (365, 60),    # under a year: every 2 months
+    (float("inf"), 180),   # older: every 6 months
+)
+
+
+def _parse_iso(text: str) -> float | None:
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+def _refresh_interval_seconds(post_age_seconds: float) -> float:
+    age_days = post_age_seconds / 86400
+    for max_days, interval_days in _REFRESH_SCHEDULE:
+        if age_days < max_days:
+            return interval_days * 86400
+    return _REFRESH_SCHEDULE[-1][1] * 86400
 
 
 class E621Meta:
@@ -105,8 +139,54 @@ class E621Meta:
                 "score": (post.get("score") or {}).get("total", 0),
                 "tags": " ".join(flat).lower(),
                 "url": E621_POST.format(pid=pid),
+                "created_at": _parse_iso(post.get("created_at")),
             }
+        record["fetched_at"] = time.time()
         with self._lock:
             self._data[pid] = record
             self._dirty = True
         return record
+
+    # ── soft refresh ────────────────────────────────────────────────────
+
+    def is_stale(self, pid: str, now: float | None = None) -> bool:
+        """
+        True when a successfully-cached post is "due" for a re-check.
+
+        Records that 404'd or are hidden (``missing``) are excluded - that
+        flag exists precisely so those are never retried automatically.
+        A record cached before this schedule existed (no ``fetched_at``)
+        counts as due exactly once, so it picks up real timestamps the
+        next time anything asks.
+        """
+        record = self._data.get(pid)
+        if not record or record.get("missing"):
+            return False
+        fetched_at = record.get("fetched_at")
+        if not fetched_at:
+            return True
+        now = now if now is not None else time.time()
+        post_age = max(now - (record.get("created_at") or fetched_at), 0)
+        return (now - fetched_at) >= _refresh_interval_seconds(post_age)
+
+    def due_for_refresh(self, pids, budget: int, exclude=()) -> list:
+        """
+        Up to `budget` stale pids from `pids`, freshest post first (posts
+        still gaining votes/tags matter more to keep current than ones
+        that settled down years ago).
+        """
+        if budget <= 0:
+            return []
+        exclude = set(exclude)
+        now = time.time()
+        with self._lock:
+            candidates = [pid for pid in dict.fromkeys(pids)
+                          if pid not in exclude and self.is_stale(pid, now)]
+
+            def sort_key(pid):
+                record = self._data.get(pid) or {}
+                fetched_at = record.get("fetched_at") or 0
+                return now - (record.get("created_at") or fetched_at)
+
+            candidates.sort(key=sort_key)
+        return candidates[:budget]

@@ -114,6 +114,20 @@ class AppConfig:
     e621_key: str = ""
     e621_fetch_delay: float = 0.6      # e621 allows ~2/sec; this stays under
     library_autofetch: bool = True     # fill in missing tags right after a sync
+    # Every regular tag fetch also folds in up to this many "due for
+    # refresh" posts (see E621Meta.is_stale) alongside the genuinely
+    # uncached ones, so scores/tags on posts already in the library
+    # quietly stay current without ever re-checking the whole library
+    # at once. 0 disables the ambient refresh (manual only).
+    library_stale_refresh_budget: int = 40
+
+    # ── Performance (tune upward as the library grows) ──────────────────
+    # In-memory ffprobe result cache, shared by both tabs. Each entry is a
+    # few hundred bytes, so even a six-figure value costs tens of MB.
+    probe_cache_limit: int = 60000
+    # On-disk scrub/hover-preview JPEG cache (temp dir, not the persistent
+    # gallery thumbnails - those have no cap and live one-per-clip).
+    frame_cache_limit: int = 30000
 
     # ── App-wide ──────────────────────────────────────────────────────────
     discreet: bool = False
