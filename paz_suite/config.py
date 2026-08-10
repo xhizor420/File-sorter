@@ -53,7 +53,6 @@ class AppConfig:
     workers: int = 1
 
     # ── Convert: frame-rate handling for editing ────────────────────────
-    fps_snap: bool = True
     force_cfr: bool = True
     edit_gop: bool = True
     loop_short: bool = False
@@ -69,7 +68,6 @@ class AppConfig:
     gap_check_enabled: bool = True
     min_height: int = 2160
     min_fps: float = 60.0
-    fps_tolerance: float = 0.5
     transfer_mode: str = "copy"  # copy | move | hardlink
 
     # ── Convert: interface ───────────────────────────────────────────────

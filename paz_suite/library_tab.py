@@ -1616,6 +1616,15 @@ class LibraryTab(ctk.CTkFrame):
     # ── tag fetching (shared cache with Convert) ────────────────────────────
 
     def missing_report(self) -> dict:
+        """
+        What Fix missing can actually still do something about.
+
+        A record whose file no longer exists on disk is excluded from the
+        probe/thumbnail counts - Fix missing can't rebuild a thumbnail for
+        a file that's gone, and counting it anyway made the button's number
+        get permanently stuck (a Sync, not Fix missing, is what clears a
+        deleted file out of the index).
+        """
         no_tags, no_probe, no_thumb, no_id = [], [], [], 0
         seen_pid = set()
         for rec in self.records:
@@ -1624,6 +1633,8 @@ class LibraryTab(ctk.CTkFrame):
             elif self.emeta.get(rec.pid) is None and rec.pid not in seen_pid:
                 seen_pid.add(rec.pid)
                 no_tags.append(rec.pid)
+            if not os.path.exists(rec.path):
+                continue
             if rec.duration <= 0 or not rec.width:
                 no_probe.append(rec)
             elif not os.path.exists(os.path.join(THUMB_DIR, thumb_key(rec.path))):
@@ -1693,6 +1704,7 @@ class LibraryTab(ctk.CTkFrame):
         def work():
             conn = db_connect()
             done = 0
+            failed = 0
             try:
                 for rec in media:
                     if not os.path.exists(rec.path):
@@ -1703,6 +1715,8 @@ class LibraryTab(ctk.CTkFrame):
                             "UPDATE files SET duration=?,width=?,height=?,fps=? WHERE path=?",
                             (info.duration, info.width, info.height, info.fps, rec.path))
                         make_thumb(rec.path, info.duration, self.cfg.thumb_width)
+                    else:
+                        failed += 1
                     done += 1
                     self.ui(self.progress.set, done / len(media))
                     if done % 10 == 0:
@@ -1712,16 +1726,19 @@ class LibraryTab(ctk.CTkFrame):
             finally:
                 conn.close()
                 self.busy = False
-                self.ui(self._media_fixed, done, bool(report["tags"]))
+                self.ui(self._media_fixed, done, bool(report["tags"]), failed)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _media_fixed(self, done: int, more_tags: bool):
+    def _media_fixed(self, done: int, more_tags: bool, failed: int = 0):
         self.fix_btn.configure(state="normal")
         self.fetch_btn.configure(state="normal")
         self._load_library()
         self.run_search()
-        self.set_status(f"Rebuilt {done} thumbnails/details", T.OK)
+        message = f"Rebuilt {done - failed}/{done} thumbnails/details"
+        if failed:
+            message += f" - {failed} could not be read (corrupt or unsupported; try Verify library)"
+        self.set_status(message, T.WARN if failed else T.OK)
         if more_tags and self.cfg.e621_enabled:
             self._fetch_tags()
 
@@ -1785,14 +1802,16 @@ class LibraryTab(ctk.CTkFrame):
         self.progress.set(0)
 
         def work():
-            hits = miss = 0
+            hits = missing = failed = 0
+            last_error = ""
             try:
                 for index, pid in enumerate(todo):
                     record = self.emeta.fetch(pid, self.cfg.e621_user, self.cfg.e621_key)
-                    if record.get("error") and not record.get("missing"):
-                        miss += 1
-                    elif record.get("missing"):
-                        miss += 1
+                    if record.get("missing"):
+                        missing += 1
+                    elif record.get("error"):
+                        failed += 1
+                        last_error = record["error"]
                     else:
                         hits += 1
                     self.ui(self.progress.set, (index + 1) / len(todo))
@@ -1808,17 +1827,30 @@ class LibraryTab(ctk.CTkFrame):
                 self.busy = False
                 self.ui(self.fetch_btn.configure, state="normal")
                 self.ui(self.fix_btn.configure, state="normal")
-                self.ui(self._fetch_done, hits, miss, len(refreshing))
+                self.ui(self._fetch_done, hits, missing, failed, last_error, len(refreshing))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _fetch_done(self, hits: int, miss: int, refreshed: int = 0):
+    def _fetch_done(self, hits: int, missing: int, failed: int = 0,
+                    last_error: str = "", refreshed: int = 0) -> None:
         self._load_library()
         self.run_search()
         self._render_details()
-        extra = f" · {refreshed} refreshed" if refreshed else ""
-        self.set_status(f"Tags fetched: {hits} tagged · {miss} unavailable{extra}",
-                        T.OK if hits else T.WARN)
+        # "missing" (post deleted/hidden on e621, cached so it's never
+        # retried) and "failed" (a transient network error, not cached, so
+        # it's retried the next time Fix missing / Fetch tags runs) look the
+        # same from the outside if lumped together - a permanently stuck
+        # count with no way to tell why is worse than no count at all.
+        bits = [f"{hits} tagged"]
+        if missing:
+            bits.append(f"{missing} gone on e621")
+        if failed:
+            reason = f" ({last_error})" if last_error else ""
+            bits.append(f"{failed} failed, will retry{reason}")
+        if refreshed:
+            bits.append(f"{refreshed} refreshed")
+        self.set_status("Tags fetched: " + " · ".join(bits),
+                        T.OK if hits else (T.WARN if (missing or failed) else T.OK))
 
     def _refresh_stale_now(self):
         if not self.records:

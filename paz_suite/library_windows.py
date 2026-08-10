@@ -86,57 +86,36 @@ class HelpWindow(ctk.CTkToplevel):
     """What every button does, in one place."""
 
     SECTIONS = (
-        ("Sync library", "Compares the chosen folders against the database "
-         "and only processes what changed - new files get probed and "
-         "thumbnailed, deleted ones are removed. The first build is the slow "
-         "one; after that it takes seconds. Ctrl+Shift+R forces a rebuild."),
-        ("Fix missing", "One click, no per-clip work: re-probes files with no "
-         "duration/resolution, regenerates absent thumbnails, then fetches "
-         "tags for every uncached post ID. The number on the button is how "
-         "much is left. Runs automatically after a sync if autofetch is on. "
-         "Right-click it for Verify library integrity - a slower, full "
-         "decode pass that catches corrupt or truncated files a quick "
-         "probe can't see."),
-        ("Fetch e621 tags", "Just the tag half of Fix missing: resolves post "
-         "IDs (the filename numbers) into artist / character / species / "
-         "rating via e621's API. Add your API key in Settings for fewer "
-         "unavailable posts. Every run also quietly soft-refreshes a small "
-         "batch of already-tagged posts that are due for a recheck - "
-         "recently-posted clips get rechecked every few days for new "
-         "votes/tags, old ones every few months, so scores stay current "
-         "without ever re-fetching the whole library at once. Right-click "
-         "for a bigger on-demand catch-up pass; tune the batch size in "
-         "Settings > Library."),
-        ("▲ Score", "The e621 upvote score for that post, next to the fps on "
-         "every card. Sort by it with the Top rated chip, or the Score sort."),
-        ("4K ✓", "Shown when a 4K/60+ copy of that exact file exists in the "
-         "premium folder (or the clip itself is 4K). Search it with is:4k."),
-        ("Ratio", "Aspect ratio isn't usually a tag, so it gets its own "
-         "dropdown next to Random: Portrait (phone-shaped, tall), "
-         "Widescreen (landscape) and Square are computed straight from each "
-         "clip's resolution - a fast way to pull clips that match your "
-         "edit's output orientation. The same filters work as search terms: "
-         "is:portrait, is:widescreen, is:square."),
+        ("Sync library", "Checks the chosen folders against the database and "
+         "only processes what changed - new files get probed and "
+         "thumbnailed, deleted ones dropped. First build is the slow one; "
+         "Ctrl+Shift+R forces a full rebuild."),
+        ("Fix missing / Verify", "Re-probes files with no duration or "
+         "resolution, rebuilds absent thumbnails, then fetches tags for "
+         "every uncached post ID - the number on the button is what's "
+         "left. Right-click it for Verify library integrity, a slower "
+         "full decode pass that catches corrupt files a quick probe can't."),
+        ("Fetch e621 tags", "Resolves post IDs (the filename numbers) into "
+         "artist / character / species / rating. Add an API key in "
+         "Settings for fewer unavailable posts. Also quietly re-checks a "
+         "small batch of older, already-tagged posts each run so scores "
+         "stay current - right-click for a bigger on-demand catch-up pass."),
+        ("Score, 4K ✓, Ratio", "▲ is the e621 upvote score - sort by it or "
+         "use the Top rated button. 4K ✓ means a 4K/60+ copy exists. Ratio "
+         "(next to Random) is a one-click Portrait / Widescreen / Square "
+         "filter, since aspect ratio isn't usually a tag."),
         ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
-         "selected clip - the whole thing at a glance. Click any frame to "
-         "jump the player straight to that moment."),
-        ("Search", "Terms AND together. -term excludes. Prefixes: artist: "
+         "selected clip. Click any frame to jump the player there."),
+        ("Search", "Terms AND together, -term excludes. Prefixes: artist: "
          "character: species: rating: folder: id: is:. Wildcards: dragon*. "
          "is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "
-         "is:square are the useful specials. Click any tag anywhere to add "
-         "it; right-click for exclude/hide."),
-        ("Viewer size", "The player scales with the window. Theater mode "
-         "(Ctrl+T, or the button above the viewer) gives it about half the "
-         "window and collapses the tag rail for close inspection."),
-        ("Picking up where you left off", "Your search, sort and rating "
-         "filter are saved as you go and restored next launch."),
-        ("Copying", "Right-click any clip > Copy for file name, name "
-         "without extension, full path, folder, post ID, e621 URL, artist "
-         "or every tag. Ctrl+C copies the selected clip's file name, "
+         "is:square are the useful specials. Click a tag to add it; "
+         "right-click for exclude/hide."),
+        ("Player", "Scales with the window; Theater mode (Ctrl+T) gives it "
+         "about half the window and collapses the tag rail."),
+        ("Copying", "Right-click any clip > Copy for name, path, post ID, "
+         "e621 URL, artist or all tags. Ctrl+C copies the name, "
          "Ctrl+Shift+C the full path."),
-        ("Search history", "Every search you press Enter on is remembered. "
-         "Up/Down arrows in the search box step through them, the ↺ "
-         "button lists them, and ✕ clears the box."),
         ("Keys", "/ search · Enter or Space play/pause · ←→ seek 5s · "
          "R random · PgUp/PgDn pages · Ctrl+L collapse tags · Ctrl+C copy "
          "name · Ctrl+F search · F5 sync · Ctrl+O folders · Ctrl+T theater"),

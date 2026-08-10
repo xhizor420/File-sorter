@@ -48,16 +48,22 @@ class PazApp:
         self._build_header()
 
         self.tabview = ctk.CTkTabview(
-            root, fg_color=T.BG, corner_radius=0,
+            root, fg_color=T.BG, corner_radius=10, anchor="w",
             segmented_button_fg_color=T.SURFACE,
             segmented_button_selected_color=T.ACCENT_DEEP,
             segmented_button_selected_hover_color=T.ACCENT_DEEP,
             segmented_button_unselected_color=T.SURFACE,
             segmented_button_unselected_hover_color=T.BTN_HOV,
+            segmented_button_font=font(13, "bold"),
             text_color=T.TEXT, command=self._on_tab_changed)
-        self.tabview.pack(fill="both", expand=True)
+        self.tabview.pack(fill="both", expand=True, padx=0, pady=(6, 0))
         for name in TAB_NAMES:
             self.tabview.add(name)
+        # CTkTabview hardcodes a 26px-tall segmented button with no public
+        # way to change it - going through the private attribute is the
+        # only way to get a strip that reads as a real navigation control
+        # instead of a small default widget dropped at the top of the page.
+        self.tabview._segmented_button.configure(height=36)
 
         self.convert = ConvertTab(self.tabview.tab("Convert"), self)
         self.library = LibraryTab(self.tabview.tab("Library"), self)
@@ -66,6 +72,7 @@ class PazApp:
             self.tabview.set(self.cfg.last_tab)
 
         self._apply_chrome()
+        self._style_tabs()
         self._bind_keys()
         root.bind("<Configure>", self._on_root_configure, add="+")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -101,9 +108,28 @@ class PazApp:
         except tk.TclError:
             pass
 
+    # Each tab has its own identity colour (pink for Convert, violet for
+    # Library) used throughout its own widgets; recolouring the shared tab
+    # strip to match whichever one is active makes the switcher read as
+    # "you are here" instead of one flat, generic control that looks the
+    # same no matter which tab is showing.
+    _TAB_ACCENTS = {"Convert": (T.ACCENT_DEEP, T.ACCENT),
+                    "Library": (T.ACCENT2_DEEP, T.ACCENT2)}
+
+    def _style_tabs(self) -> None:
+        deep, bright = self._TAB_ACCENTS.get(self.tabview.get(),
+                                             (T.ACCENT_DEEP, T.ACCENT))
+        self.tabview._segmented_button.configure(
+            selected_color=deep, selected_hover_color=deep)
+        self.tabview._segmented_button._buttons_dict[self.tabview.get()].configure(
+            text_color=bright)
+        other = "Library" if self.tabview.get() == "Convert" else "Convert"
+        self.tabview._segmented_button._buttons_dict[other].configure(text_color=T.DIM)
+
     def _on_tab_changed(self) -> None:
         self.cfg.last_tab = self.tabview.get()
         self.cfg.save()
+        self._style_tabs()
 
     def _on_root_configure(self, event) -> None:
         if event.widget is not self.root:

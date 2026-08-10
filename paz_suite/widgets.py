@@ -81,14 +81,16 @@ class PeekWindow:
 
     Used for hovering a queue row, a gallery card, or the inspector
     timeline. It never takes focus and never appears in the taskbar. A
-    thin progress bar sits under the frame, filled to match how far into
-    the clip that frame is - the same "scrub the thumbnail" cue YouTube
-    shows on hover, so the bubble tells you where you are at a glance
-    instead of just a timecode you have to read.
+    dedicated progress strip sits between the frame and the caption,
+    filled to match how far into the clip that frame is - the same
+    "scrub the thumbnail" cue YouTube shows on hover. It's a strip of
+    its own rather than an overlay on the frame, so it stays visible no
+    matter what's in the video (a bar drawn over dark footage used to all
+    but disappear).
     """
 
     W, H, CAP = 380, 214, 24
-    BAR_H = 3
+    BAR_H = 5
 
     def __init__(self, master):
         self.master = master
@@ -109,12 +111,12 @@ class PeekWindow:
         self.win.withdraw()
         frame = tk.Frame(self.win, bg=T.LINE, bd=0)
         frame.pack(fill="both", expand=True)
-        self.canvas = tk.Canvas(frame, width=self.W, height=self.H + self.CAP,
+        self.canvas = tk.Canvas(frame, width=self.W, height=self.H + self.BAR_H + self.CAP,
                                  bg=T.INPUT, highlightthickness=0, bd=0)
         self.canvas.pack(padx=1, pady=1)
 
     def _place(self, x_root: int, y_root: int) -> None:
-        w, h = self.W + 2, self.H + self.CAP + 2
+        w, h = self.W + 2, self.H + self.BAR_H + self.CAP + 2
         x = x_root + 18
         y = y_root - h - 16
         screen_w = self.win.winfo_screenwidth()
@@ -128,17 +130,22 @@ class PeekWindow:
         self.win.geometry(f"{w}x{h}+{max(int(x), 0)}+{max(int(y), 0)}")
 
     def _progress_bar(self, fraction: float | None) -> None:
-        y0 = self.H - self.BAR_H
-        self.canvas.create_rectangle(0, y0, self.W, self.H, fill=T.LINE_SOFT, outline="")
-        if fraction is not None:
-            fill_w = max(0.0, min(fraction, 1.0)) * self.W
-            if fill_w > 0:
-                self.canvas.create_rectangle(0, y0, fill_w, self.H,
-                                             fill=T.ACCENT, outline="")
+        y0, y1 = self.H, self.H + self.BAR_H
+        self.canvas.create_rectangle(0, y0, self.W, y1, fill=T.SURFACE, outline="")
+        if fraction is None:
+            return
+        fill_w = max(0.0, min(fraction, 1.0)) * self.W
+        if fill_w <= 0:
+            return
+        self.canvas.create_rectangle(0, y0, fill_w, y1, fill=T.ACCENT, outline="")
+        # a bright leading edge, like the scrub head on a real seek bar
+        head = max(fill_w - 3, 0)
+        self.canvas.create_rectangle(head, y0, fill_w, y1, fill=T.ACCENT_HOV, outline="")
 
     def _caption(self, title: str, sub: str) -> None:
-        y = self.H + self.CAP // 2
-        self.canvas.create_rectangle(0, self.H, self.W, self.H + self.CAP,
+        top = self.H + self.BAR_H
+        y = top + self.CAP // 2
+        self.canvas.create_rectangle(0, top, self.W, top + self.CAP,
                                       fill=T.ELEVATED, outline="")
         if title:
             self.canvas.create_text(10, y, text=title, fill=T.DIM,
@@ -176,6 +183,7 @@ class PeekWindow:
         self._img = None
         self.canvas.create_text(self.W // 2, self.H // 2, text=message,
                                  fill=T.FAINT, font=(T.UI, 10))
+        self._progress_bar(None)
         self._caption(title, "")
         self._place(x_root, y_root)
         self.win.deiconify()

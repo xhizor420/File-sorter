@@ -90,7 +90,26 @@ telling you what's in your library and what still needs converting.
 - **Hover-preview progress bar.** Hovering a queue row, gallery card or
   the Convert timeline shows a thin bar under the preview frame, filled to
   match how far into the clip that frame is — the same cue YouTube shows
-  on hover, instead of just a timecode you had to read.
+  on hover, instead of just a timecode you had to read. It's a strip of
+  its own below the frame rather than an overlay on it, so it stays
+  visible no matter what's in the video.
+- **60fps, checked plainly.** The "snap 59.94 to 60" toggle and the
+  separate fps-tolerance setting are gone; 58.5-59.99 fps sources are
+  always resampled to exactly 60 (59.94 is just NTSC's way of saying 60),
+  and the sort check is a plain `fps >= minimum fps` after that - one
+  behavior instead of two overlapping, independently-configurable ones.
+- **Fix missing no longer gets permanently stuck.** Its outstanding count
+  used to include DB rows whose file had since been deleted from disk (or
+  that fail to probe at all) - Fix missing can't do anything about either
+  case, so the badge would sit on the same number forever. Dead files are
+  now excluded from the count (Sync is what actually clears them out),
+  and files that exist but can't be decoded are called out by name in the
+  status line instead of silently re-counted every time.
+- **Tag-fetch failures are no longer lumped together.** A post e621
+  confirms is gone (cached, never retried) and a transient network error
+  (not cached, retried next time) used to both show up as one "unavailable"
+  number, so a stuck count gave no clue why. The status line after a
+  fetch now says which is which.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the
@@ -120,7 +139,10 @@ pool.
 ## Interface
 
 A slim shared header (suite branding) sits above the Convert/Library tab
-strip. Each tab's own top area is two rows: a browsing row (brand, search,
+strip. The tab strip itself recolours to match whichever tab is active
+(pink for Convert, violet for Library) instead of staying one flat,
+generic control regardless of which tab is showing. Each tab's own top
+area is two rows: a browsing row (brand, search,
 rating/sort) and, underneath it, an action toolbar - maintenance actions
 (Sync, Fix missing, Fetch tags / Scan, Start) on the left, configuration
 (Settings, Help) on the right. The standalone Folders button is gone;

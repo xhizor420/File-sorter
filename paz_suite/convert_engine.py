@@ -61,10 +61,12 @@ def snap_target(cfg: AppConfig) -> int:
 def snap_applies(cfg: AppConfig, fps: float) -> bool:
     """
     True when a near-miss source (58.5-59.99 for a 60 target) should be
-    resampled to exactly the target. Never touches sources at or above the
-    target, so 120 fps footage is left alone.
+    resampled to exactly the target. Always on - 59.94 is just NTSC's way
+    of saying 60, so it's always treated as the real target rather than
+    failing the bar by a rounding hair. Never touches sources at or above
+    the target, so 120 fps footage is left alone.
     """
-    if not cfg.fps_snap or not fps:
+    if not fps:
         return False
     target = snap_target(cfg)
     return (target - 1.5) <= fps < (target - 1e-3)
@@ -76,7 +78,7 @@ def classify(cfg: AppConfig, width: int, height: int, fps: float) -> tuple:
     if snap_applies(cfg, fps):
         fps = float(snap_target(cfg))
     big = short_side >= cfg.min_height
-    fast = fps >= (cfg.min_fps - cfg.fps_tolerance)
+    fast = fps >= cfg.min_fps
     if big and fast:
         return cfg.premium_root, "Edit pool"
     if big:

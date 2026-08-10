@@ -205,24 +205,24 @@ class SettingsWindow(ctk.CTkToplevel):
                     ["ultrafast", "veryfast", "fast", "medium", "slow", "veryslow"])
 
         self._section(tab, "Frame rate for editing", 8)
-        self._switch(tab, 9, "fps_snap", "Snap 59.94 to exactly 60.00")
-        self._hint(tab, 10, "Resamples 58.5-59.99 fps sources to the exact "
-                           "target. Higher rates are never touched.")
-        self._switch(tab, 11, "force_cfr", "Force constant frame rate")
-        self._switch(tab, 12, "edit_gop", "1-second keyframes (smooth scrubbing)")
-        self._switch(tab, 13, "loop_short", "Loop very short clips")
-        self._number(tab, 14, "loop_min", "...to at least (s)", 1, 60)
+        self._hint(tab, 9, "58.5-59.99 fps sources are always resampled to "
+                          "exactly 60.00 (59.94 is just NTSC's way of saying "
+                          "60). Higher rates are never touched.")
+        self._switch(tab, 10, "force_cfr", "Force constant frame rate")
+        self._switch(tab, 11, "edit_gop", "1-second keyframes (smooth scrubbing)")
+        self._switch(tab, 12, "loop_short", "Loop very short clips")
+        self._number(tab, 13, "loop_min", "...to at least (s)", 1, 60)
 
-        self._section(tab, "Audio", 15)
-        self._choice(tab, 16, "audio_mode", "Audio", ["keep", "mute", "none"])
-        self._hint(tab, 17, "mute = silent track (uniform in editors), "
+        self._section(tab, "Audio", 14)
+        self._choice(tab, 15, "audio_mode", "Audio", ["keep", "mute", "none"])
+        self._hint(tab, 16, "mute = silent track (uniform in editors), "
                            "none = no audio stream at all")
 
-        self._section(tab, "Throughput", 18)
-        self._number(tab, 19, "workers", "Parallel files", 1, 8)
-        self._number(tab, 20, "stall_timeout", "Stall timeout (s)", 15, 3600)
-        self._switch(tab, 21, "verify_output", "Verify each result by decoding it")
-        self._hint(tab, 22, "Catches corrupt output. Roughly doubles run time.")
+        self._section(tab, "Throughput", 17)
+        self._number(tab, 18, "workers", "Parallel files", 1, 8)
+        self._number(tab, 19, "stall_timeout", "Stall timeout (s)", 15, 3600)
+        self._switch(tab, 20, "verify_output", "Verify each result by decoding it")
+        self._hint(tab, 21, "Catches corrupt output. Roughly doubles run time.")
 
     def _build_sorting(self, tab) -> None:
         tab.grid_columnconfigure(1, weight=1)
@@ -235,17 +235,18 @@ class SettingsWindow(ctk.CTkToplevel):
 
         self._number(tab, 2, "min_height", "Minimum height", 240, 8192)
         self._number(tab, 3, "min_fps", "Minimum fps", 1, 480)
-        self._number(tab, 4, "fps_tolerance", "fps tolerance", 0, 5)
-        self._hint(tab, 5, "0.5 keeps 59.94 in the edit pool; 0 demands the exact rate.")
+        self._hint(tab, 4, "59.94 always counts as 60 - see Encoding > Frame "
+                          "rate for editing. Otherwise the fps must meet this "
+                          "exactly.")
 
-        self._section(tab, "Delivery", 6)
-        self._choice(tab, 7, "transfer_mode", "Move files by", ["copy", "move", "hardlink"])
-        self._hint(tab, 8, "Hardlink is instant and uses no extra space, but "
+        self._section(tab, "Delivery", 5)
+        self._choice(tab, 6, "transfer_mode", "Move files by", ["copy", "move", "hardlink"])
+        self._hint(tab, 7, "Hardlink is instant and uses no extra space, but "
                           "only within one drive.")
 
-        self._switch(tab, 9, "sort_enabled", "Sort after converting")
-        self._switch(tab, 10, "sort_existing", "Also sort outputs from earlier runs")
-        self._switch(tab, 11, "gap_check_enabled",
+        self._switch(tab, 8, "sort_enabled", "Sort after converting")
+        self._switch(tab, 9, "sort_existing", "Also sort outputs from earlier runs")
+        self._switch(tab, 10, "gap_check_enabled",
                     "Check for upscale gaps after Start (convert -> sort -> "
                     "double-check)")
 
