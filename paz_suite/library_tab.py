@@ -13,6 +13,7 @@ import time
 import tkinter as tk
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from tkinter import messagebox
 
 import customtkinter as ctk
 from PIL import Image, ImageTk
@@ -28,7 +29,7 @@ from .e621 import E621_POST
 from .library_db import db_connect, Rec, parse_query, rec_matches, SORTS
 from .library_player import InlinePlayer
 from .library_windows import (
-    PickSetsWindow, HiddenTagsWindow, HelpWindow, FoldersWindow,
+    PickSetsWindow, HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow,
 )
 from .widgets import PeekWindow
 
@@ -186,6 +187,9 @@ class LibraryTab(ctk.CTkFrame):
             font=font(11, "bold"), fg_color=T.ACCENT_DEEP, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self._fill_missing)
         self.fix_btn.pack(side="left", padx=(0, 8))
+        # Right-click for the expensive, occasional check: a full decode
+        # pass looking for corrupt files, not just missing tags/thumbs.
+        self.fix_btn.bind("<Button-3>", self._verify_menu)
 
         self.fetch_btn = ctk.CTkButton(
             right, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
@@ -815,6 +819,7 @@ class LibraryTab(ctk.CTkFrame):
                 rec.tags = set((meta.get("tags") or "").split())
                 rec.url = meta.get("url") or ""
                 self.tag_universe |= rec.tags
+                rec.compute_named()
             rec.premium = (rec.height >= 2000
                            or rec.name in premium.get(rec.folder, ()))
             self.records.append(rec)
@@ -992,9 +997,7 @@ class LibraryTab(ctk.CTkFrame):
             species.update(rec.species)
             series.update(rec.copyrights)
             lore.update(rec.lore)
-            named = (set(rec.artists) | set(rec.characters) | set(rec.species)
-                    | set(rec.copyrights) | set(rec.lore))
-            other.update(t for t in rec.tags if t not in named)
+            other.update(t for t in rec.tags if t not in rec.named)
 
         hidden = set(self.cfg.hidden_tags)
         row = 0
@@ -1399,8 +1402,6 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_meta.configure(text="  ·  ".join(bits))
         self.pick_btn.configure(text="★ Picked" if rec.path in self.picks else "+ Pick")
 
-        named = set(rec.artists) | set(rec.characters) | set(rec.species) \
-            | set(rec.copyrights) | set(rec.lore)
         groups = [
             ("Artists", "artist:", rec.artists, T.ACCENT2),
             ("Characters", "character:", rec.characters, T.ACCENT),
@@ -1409,7 +1410,7 @@ class LibraryTab(ctk.CTkFrame):
             ("Lore", "lore:", rec.lore, T.ACCENT2_HOV),
         ]
         if not self.cfg.discreet:
-            groups.append(("Tags", "", sorted(rec.tags - named), T.DIM))
+            groups.append(("Tags", "", sorted(rec.tags - rec.named), T.DIM))
 
         row = 0
         any_content = False
@@ -1791,6 +1792,35 @@ class LibraryTab(ctk.CTkFrame):
             elif not os.path.exists(os.path.join(THUMB_DIR, thumb_key(rec.path))):
                 no_thumb.append(rec)
         return {"tags": no_tags, "probe": no_probe, "thumbs": no_thumb, "no_id": no_id}
+
+    # ── integrity check (full decode, catches what probing can't) ──────────
+
+    def _verify_menu(self, event):
+        menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
+                       activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
+                       bd=0, font=(T.UI, 10))
+        menu.add_command(label="Verify library integrity…", command=self._verify_library)
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _verify_library(self):
+        if not self.records:
+            self.set_status("Nothing to verify yet - sync the library first.", T.WARN)
+            return
+        if not messagebox.askyesno(
+                "Verify library",
+                f"Fully decode all {len(self.records)} clips to check for "
+                "corruption?\n\nProbing only reads the file header, so it "
+                "can't catch a truncated download or a broken frame in the "
+                "middle - this does a full decode instead, which is much "
+                "slower. It runs in the background, can be stopped at any "
+                "point, and nothing is modified unless you delete a result "
+                "yourself.",
+                parent=self.root):
+            return
+        VerifyWindow(self.root, self)
 
     def _fill_missing(self):
         if self.busy:

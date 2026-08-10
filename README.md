@@ -46,6 +46,19 @@ telling you what's in your library and what still needs converting.
   duplicate finder's initial pass all now run several ffprobe calls in
   parallel (scaled to your CPU count) instead of one file at a time —
   noticeably faster on anything but a tiny library.
+- **Verify library integrity** (right-click **Fix missing**): a full
+  ffmpeg decode pass over every clip, catching corrupt or truncated files
+  that probing can't see (probing only reads the container header, so a
+  file with a broken frame in the middle still "probes" fine). Runs
+  several decodes in parallel in the background, is cancellable, and
+  reports anything broken with a show-in-folder/delete action. Nothing is
+  touched unless you delete a result yourself.
+- Two changes aimed specifically at libraries in the five-figure range and
+  growing: the media-probe cache is now a bounded LRU (25,000 entries)
+  instead of a dict that got wiped entirely every 8,000 probes, and each
+  clip's artist/character/species/copyright/lore names are unioned once
+  when the library loads instead of being rebuilt from scratch on every
+  search keystroke and every clip you select.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the
@@ -57,16 +70,23 @@ contact sheet / scrub-preview inspector.
 
 **Library** is the home base for browsing what you already have — search by
 artist/character/species/rating/tag, see what's tagged vs. not, what has a
-4K/60fps edit-ready copy vs. not (`is:4k` / `is:no4k`), and what's missing
-metadata entirely (`is:untagged`, `is:noid`, or just press **Fix missing**).
+4K/60fps edit-ready copy vs. not (`is:4k` / `is:no4k`), what's missing
+metadata entirely (`is:untagged`, `is:noid`, or just press **Fix missing**),
+and now whether any file is actually corrupt (**Verify library**, above).
+This is the tag-driven browsing step for pulling clips to edit with.
 
-**Convert** is where you point at a source folder and see exactly what's
-queued to convert vs. already done, then Start. **Find upscale gaps**
-compares your converted library against the 4K/60+ pool and tells you what
-still needs upscaling; **Promote upscales** moves anything that now meets
-the bar into the edit pool.
+**Convert** is where an external downloader (or you, by hand) drops files
+into the source folder; watch mode picks up anything new once its size
+stops changing, converts it, sorts it by resolution/frame rate, and
+**Find upscale gaps** double-checks the result against the 4K/60+ pool —
+so at any point Scan tells you exactly what's still queued vs. already
+done, and the gap check tells you what's converted but not yet upscaled.
+**Promote upscales** moves anything that now meets the bar into the edit
+pool.
 
 ## Setup
+
+Python 3.9+.
 
 ```
 pip install -r requirements.txt
@@ -110,7 +130,7 @@ paz_suite/
   convert_tab.py            the Convert tab
   library_db.py             SQLite schema, search parser (no UI)
   library_player.py         the embedded clip player (thin UI over player_engine)
-  library_windows.py        pick sets, hidden tags, help, folders
+  library_windows.py        pick sets, hidden tags, help, folders, integrity verifier
   library_tab.py            the Library tab
   settings_window.py        the one settings dialog
   app.py                    window shell, tab switcher, shared keyboard dispatch

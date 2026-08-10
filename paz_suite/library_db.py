@@ -61,6 +61,14 @@ class Rec:
     tags: set = field(default_factory=set)
     url: str = ""
     premium: bool = False        # a 4K/60+ copy exists (or this IS 4K)
+    # artist/character/species/copyright/lore names, union'd once at load
+    # time instead of on every tag-panel and detail-panel render - the
+    # difference is real once a library runs into five figures of clips.
+    named: frozenset = field(default_factory=frozenset)
+
+    def compute_named(self) -> None:
+        self.named = frozenset(self.artists) | frozenset(self.characters) \
+            | frozenset(self.species) | frozenset(self.copyrights) | frozenset(self.lore)
 
 
 def parse_query(text: str) -> tuple:

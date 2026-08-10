@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from PIL import Image, ImageDraw, ImageFilter
@@ -53,7 +54,8 @@ class MediaInfo:
         return f"{self.fps:.2f}".rstrip("0").rstrip(".") if self.fps else "--"
 
 
-_probe_cache: dict = {}
+_PROBE_CACHE_LIMIT = 25000    # a growing library shouldn't keep re-probing
+_probe_cache: "OrderedDict" = OrderedDict()
 _probe_lock = threading.Lock()
 
 
@@ -79,6 +81,8 @@ def probe(path: str, use_cache: bool = True) -> MediaInfo | None:
     if use_cache:
         with _probe_lock:
             hit = _probe_cache.get(key)
+            if hit is not None:
+                _probe_cache.move_to_end(key)
         if hit is not None:
             return hit
 
@@ -126,8 +130,9 @@ def probe(path: str, use_cache: bool = True) -> MediaInfo | None:
 
     with _probe_lock:
         _probe_cache[key] = info
-        if len(_probe_cache) > 8000:
-            _probe_cache.clear()
+        _probe_cache.move_to_end(key)
+        while len(_probe_cache) > _PROBE_CACHE_LIMIT:
+            _probe_cache.popitem(last=False)   # evict the least-recently-used entry
     return info
 
 
@@ -257,7 +262,7 @@ class ThumbCache:
     identical ones.
     """
 
-    def __init__(self, limit: int = 4000, subdir: str = "paz_frames"):
+    def __init__(self, limit: int = 12000, subdir: str = "paz_frames"):
         self.root = os.path.join(tempfile.gettempdir(), subdir)
         self.limit = limit
         self._lock = threading.Lock()

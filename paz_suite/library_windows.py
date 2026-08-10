@@ -1,17 +1,20 @@
 """Library-tab dialog windows: saved pick sets, hidden-tag management, the
-help reference, and the folder picker.
+help reference, the folder picker, and the library integrity verifier.
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import tkinter as tk
-from tkinter import filedialog
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 
 from .theme import T, font
-from .files import is_ignored_dir
+from .files import is_ignored_dir, open_in_explorer
+from .convert_engine import verify
 
 
 class PickSetsWindow(ctk.CTkToplevel):
@@ -154,7 +157,10 @@ class HelpWindow(ctk.CTkToplevel):
         ("Fix missing", "One click, no per-clip work: re-probes files with no "
          "duration/resolution, regenerates absent thumbnails, then fetches "
          "tags for every uncached post ID. The number on the button is how "
-         "much is left. Runs automatically after a sync if autofetch is on."),
+         "much is left. Runs automatically after a sync if autofetch is on. "
+         "Right-click it for Verify library integrity - a slower, full "
+         "decode pass that catches corrupt or truncated files a quick "
+         "probe can't see."),
         ("Fetch e621 tags", "Just the tag half of Fix missing: resolves post "
          "IDs (the filename numbers) into artist / character / species / "
          "rating via e621's API. Add your API key in Settings for fewer "
@@ -388,3 +394,156 @@ class FoldersWindow(ctk.CTkToplevel):
                    self.cfg.library_recursive) != self._before
         self.tab._folders_saved(changed)
         self.destroy()
+
+
+class VerifyWindow(ctk.CTkToplevel):
+    """
+    Full decode pass over the library to catch corrupt or truncated files
+    that a quick probe can't see - probing only reads container headers,
+    so a file with a broken frame in the middle still probes clean.
+
+    Runs a handful of ffmpeg decodes in parallel (like the duplicate
+    finder's probing pass) and reports anything that fails. Nothing is
+    touched unless you explicitly delete a broken file from the results.
+    """
+
+    def __init__(self, parent, tab):
+        super().__init__(parent)
+        self.tab = tab
+        self.alive = True
+        self._cancelled = threading.Event()
+        self._broken = 0
+
+        self.title("Verify library")
+        self.geometry("760x600")
+        self.configure(fg_color=T.BG)
+        self.transient(parent)
+        self.after(120, self.lift)
+        self.protocol("WM_DELETE_WINDOW", self._close)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(2, weight=1)
+
+        head = ctk.CTkFrame(self, fg_color="transparent")
+        head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 6))
+        head.grid_columnconfigure(0, weight=1)
+        self.status = ctk.CTkLabel(head, text="Starting…", font=font(11, mono=True),
+                                    text_color=T.DIM, anchor="w")
+        self.status.grid(row=0, column=0, sticky="w")
+        self.stop_btn = ctk.CTkButton(
+            head, text="Stop", width=70, height=28, corner_radius=7,
+            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.WARN, command=self._stop)
+        self.stop_btn.grid(row=0, column=1, padx=(10, 0))
+
+        self.progress = ctk.CTkProgressBar(self, height=5, corner_radius=3,
+                                            fg_color=T.LINE_SOFT, progress_color=T.ACCENT2)
+        self.progress.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
+        self.progress.set(0)
+
+        self.body = ctk.CTkScrollableFrame(
+            self, fg_color=T.SURFACE, corner_radius=12,
+            scrollbar_button_color=T.LINE, scrollbar_button_hover_color=T.FAINT)
+        self.body.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        self.body.grid_columnconfigure(0, weight=1)
+
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _close(self):
+        self.alive = False
+        self._cancelled.set()
+        self.destroy()
+
+    def _stop(self):
+        self._cancelled.set()
+        self.stop_btn.configure(state="disabled", text="Stopping…")
+
+    def ui(self, fn, *a, **k):
+        if not self.alive:
+            return
+        try:
+            self.after(0, lambda: fn(*a, **k))
+        except (tk.TclError, RuntimeError):
+            pass
+
+    def _run(self):
+        paths = [rec.path for rec in self.tab.records if os.path.exists(rec.path)]
+        total = len(paths)
+        if not total:
+            self.ui(self.status.configure, text="Nothing to verify - the library is empty.")
+            return
+        workers = min(4, max(2, os.cpu_count() or 4))
+        checked = 0
+
+        pool = ThreadPoolExecutor(max_workers=workers)
+        try:
+            futures = {pool.submit(verify, path): path for path in paths}
+            for future in as_completed(futures):
+                if self._cancelled.is_set():
+                    break
+                path = futures[future]
+                try:
+                    ok, error = future.result()
+                except Exception as exc:
+                    ok, error = False, str(exc)
+                checked += 1
+                if not ok:
+                    self._broken += 1
+                    self.ui(self._add_broken, path, error or "decode failed")
+                if checked % 3 == 0 or checked == total:
+                    self.ui(self._tick, checked, total)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+        stopped = self._cancelled.is_set()
+        self.ui(self._done, checked, total, stopped)
+
+    def _tick(self, checked: int, total: int) -> None:
+        self.progress.set(checked / total if total else 0)
+        self.status.configure(
+            text=f"Verified {checked}/{total} · {self._broken} broken so far")
+
+    def _done(self, checked: int, total: int, stopped: bool) -> None:
+        self.stop_btn.configure(state="disabled", text="Stopped" if stopped else "Done")
+        if stopped:
+            self.status.configure(
+                text=f"Stopped after {checked}/{total} · {self._broken} broken found",
+                text_color=T.WARN)
+        elif self._broken:
+            self.status.configure(
+                text=f"Checked {checked} clips · {self._broken} broken", text_color=T.WARN)
+        else:
+            self.status.configure(text=f"Checked {checked} clips · all clean", text_color=T.OK)
+
+    def _add_broken(self, path: str, error: str) -> None:
+        row = len(self.body.winfo_children())
+        card = ctk.CTkFrame(self.body, fg_color=T.ELEVATED, corner_radius=8)
+        card.grid(row=row, column=0, sticky="ew", padx=8, pady=4)
+        card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(card, text=os.path.basename(path), font=font(11, "bold"),
+                     text_color=T.FAIL, anchor="w"
+                     ).grid(row=0, column=0, sticky="w", padx=12, pady=(8, 0))
+        ctk.CTkLabel(card, text=error.splitlines()[0][:160], font=font(10, mono=True),
+                     text_color=T.DIM, anchor="w"
+                     ).grid(row=1, column=0, sticky="w", padx=12, pady=(0, 8))
+
+        ctk.CTkButton(card, text="Show in folder", height=24, width=110, corner_radius=6,
+                      font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                      text_color=T.DIM, command=lambda p=path: open_in_explorer(p)
+                      ).grid(row=0, column=1, rowspan=2, padx=(4, 4), pady=8)
+        ctk.CTkButton(card, text="Delete", height=24, width=70, corner_radius=6,
+                      font=font(10), fg_color=T.BTN, hover_color=T.FAIL_DEEP,
+                      text_color=T.DIM, command=lambda p=path, c=card: self._delete(p, c)
+                      ).grid(row=0, column=2, rowspan=2, padx=(0, 10), pady=8)
+
+    def _delete(self, path: str, card) -> None:
+        if not messagebox.askyesno(
+                "Delete file", f"Delete this broken file?\n\n{path}", parent=self):
+            return
+        try:
+            os.remove(path)
+        except OSError as exc:
+            messagebox.showerror("Could not delete", str(exc), parent=self)
+            return
+        card.destroy()
+        self.tab.set_status(f"Deleted broken file: {os.path.basename(path)}", T.WARN)
