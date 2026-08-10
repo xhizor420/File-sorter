@@ -68,15 +68,14 @@ telling you what's in your library and what still needs converting.
   cache sizes are now tunable in **Settings → Library → Performance**
   instead of fixed constants, so they can keep growing as your library
   does.
-- **Soft tag refresh.** Previously a post's tags/score were fetched once
-  and never touched again. Every **Fetch e621 tags** run now also folds
-  in a small, bounded batch of already-cached posts that are "due" for a
-  recheck - recently-posted clips get rechecked every few days (still
-  gaining votes/tags), clips from old, settled posts every few months -
-  so scores and tags stay roughly current without ever re-fetching a
-  13,000-post library in one pass. The batch size is tunable (`Settings →
-  Library`, default 40/run); right-click **Fetch e621 tags** for a bigger
-  on-demand catch-up pass.
+- **Soft tag refresh, and tag fetching that doesn't wait to be asked.** A
+  small batch of due-for-recheck posts (recently-posted clips every few
+  days, old settled ones every few months) now runs automatically when
+  the Library tab opens and after every sync, so scores/tags stay current
+  and new files get tagged without pressing anything. Pressing **Fetch
+  e621 tags** yourself is now the deliberate, thorough action instead -
+  it catches up every post that's due, not just a small batch. The
+  ambient batch size is tunable in `Settings → Library`.
 - **Ratio quick filter.** Aspect ratio isn't usually an e621 tag, so it's
   handled separately: `is:portrait`, `is:widescreen` and `is:square` are
   computed directly from each clip's resolution. A single Ratio dropdown
@@ -94,10 +93,12 @@ telling you what's in your library and what still needs converting.
   its own below the frame rather than an overlay on it, so it stays
   visible no matter what's in the video.
 - **60fps, checked plainly.** The "snap 59.94 to 60" toggle and the
-  separate fps-tolerance setting are gone; 58.5-59.99 fps sources are
-  always resampled to exactly 60 (59.94 is just NTSC's way of saying 60),
-  and the sort check is a plain `fps >= minimum fps` after that - one
-  behavior instead of two overlapping, independently-configurable ones.
+  separate fps-tolerance setting are gone; anything from 58.5 fps up to
+  (not touching) the target is always resampled to exactly 60 - no
+  epsilon-sized gap near the boundary for an odd fps reading to slip
+  through uncaught - and the sort check is a plain `fps >= minimum fps`
+  after that, one behavior instead of two overlapping, independently-
+  configurable ones.
 - **Fix missing no longer gets permanently stuck.** Its outstanding count
   used to include DB rows whose file had since been deleted from disk (or
   that fail to probe at all) - Fix missing can't do anything about either
@@ -110,6 +111,14 @@ telling you what's in your library and what still needs converting.
   (not cached, retried next time) used to both show up as one "unavailable"
   number, so a stuck count gave no clue why. The status line after a
   fetch now says which is which.
+- **The sidebar's tag groups collapse.** Artists / Characters / Species /
+  Series / Lore / Tags in the left sidebar each have their own ▾/▸ toggle
+  now, same as the detail panel on the right already had - collapse the
+  categories you don't need to cut through a big tag list faster.
+- **The Library player's seek bar previews too.** Hovering it now pops
+  the same YouTube-style frame preview the gallery cards and Convert's
+  timeline already had; it was the one scrub surface in the app that
+  didn't.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the
@@ -141,8 +150,12 @@ pool.
 A slim shared header (suite branding) sits above the Convert/Library tab
 strip. The tab strip itself recolours to match whichever tab is active
 (pink for Convert, violet for Library) instead of staying one flat,
-generic control regardless of which tab is showing. Each tab's own top
-area is two rows: a browsing row (brand, search,
+generic control regardless of which tab is showing, and each tab's own
+hero panels (Convert's queue table and controls card; Library's gallery
+shell, detail card and tag sidebar) carry a matching accent-tinted
+border instead of the same neutral grey everywhere - the two tabs read
+as differently-identified places, not one layout wearing two labels.
+Each tab's own top area is two rows: a browsing row (brand, search,
 rating/sort) and, underneath it, an action toolbar - maintenance actions
 (Sync, Fix missing, Fetch tags / Scan, Start) on the left, configuration
 (Settings, Help) on the right. The standalone Folders button is gone;

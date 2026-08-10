@@ -86,6 +86,12 @@ class LibraryTab(ctk.CTkFrame):
         else:
             self.set_status("No index yet", T.WARN)
         self.run_search()
+        # Quietly pick up tags for anything fresh as soon as the tab opens,
+        # same small ambient batch a sync folds in - no need to wait for a
+        # manual Sync just to notice new post IDs. The Fetch button itself
+        # is reserved for a real, user-requested full pass (see _fetch_tags).
+        if self.records and self.cfg.library_autofetch and self.cfg.e621_enabled:
+            self.after(800, self._fetch_tags)
 
     # ── copy ─────────────────────────────────────────────────────────────
 
@@ -197,7 +203,7 @@ class LibraryTab(ctk.CTkFrame):
         self.sync_btn.pack(side="left", padx=(0, 8))
 
         self.fix_btn = ctk.CTkButton(
-            actions, text="Fix missing", width=118, height=30, corner_radius=7,
+            actions, text="Fix missing", width=190, height=30, corner_radius=7,
             font=font(11, "bold"), fg_color=T.ACCENT_DEEP, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self._fill_missing)
         self.fix_btn.pack(side="left", padx=(0, 8))
@@ -208,11 +214,8 @@ class LibraryTab(ctk.CTkFrame):
         self.fetch_btn = ctk.CTkButton(
             actions, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT, command=self._fetch_tags)
+            text_color=T.ACCENT, command=lambda: self._fetch_tags(full=True))
         self.fetch_btn.pack(side="left")
-        # Right-click for a bigger, on-demand soft-refresh pass - every
-        # regular fetch already folds in a small one automatically.
-        self.fetch_btn.bind("<Button-3>", self._fetch_menu)
 
         config = ctk.CTkFrame(row2, fg_color="transparent")
         config.grid(row=0, column=2, sticky="e", padx=16, pady=(0, 10))
@@ -255,7 +258,7 @@ class LibraryTab(ctk.CTkFrame):
 
         self.tagpanel = ctk.CTkScrollableFrame(
             self.side, fg_color=T.SURFACE, corner_radius=12, border_width=1,
-            border_color=T.LINE, scrollbar_button_color=T.LINE,
+            border_color=T.ACCENT2_DEEP, scrollbar_button_color=T.LINE,
             scrollbar_button_hover_color=T.FAINT)
         self.tagpanel.grid(row=1, column=0, sticky="nsew", pady=(2, 10))
         self.tagpanel.grid_columnconfigure(0, weight=1)
@@ -344,7 +347,7 @@ class LibraryTab(ctk.CTkFrame):
         pbtn("▶", lambda: self.turn_page(1)).pack(side="left", padx=(4, 0))
 
         shell = ctk.CTkFrame(center, fg_color=T.SURFACE, corner_radius=12,
-                             border_width=1, border_color=T.LINE)
+                             border_width=1, border_color=T.ACCENT2_DEEP)
         shell.grid(row=2, column=0, sticky="nsew")
         shell.grid_columnconfigure(0, weight=1)
         shell.grid_rowconfigure(0, weight=1)
@@ -476,7 +479,7 @@ class LibraryTab(ctk.CTkFrame):
         self.theater_btn.grid(row=0, column=1, sticky="e")
 
         card = ctk.CTkFrame(panel, fg_color=T.SURFACE, corner_radius=12,
-                            border_width=1, border_color=T.LINE)
+                            border_width=1, border_color=T.ACCENT2_DEEP)
         card.grid(row=1, column=0, sticky="ew")
         card.grid_columnconfigure(0, weight=1)
 
@@ -680,6 +683,15 @@ class LibraryTab(ctk.CTkFrame):
     # ── library loading ─────────────────────────────────────────────────────
 
     def _refresh_missing_badge(self):
+        """
+        The badge used to just show a bare total, e.g. "(2)" - a number
+        that maps to nothing else on screen, since it sums three unrelated
+        counts (untagged / unprobed / unthumbnailed). That's what made a
+        stuck "(2)" look like a bug even when it wasn't: the Untagged chip
+        only reflects the tags part, so the two numbers can legitimately
+        disagree. Showing the actual breakdown on the button removes the
+        guessing.
+        """
         report = self.missing_report()
         n_tags = len(report["tags"])
         n_probe = len(report["probe"])
@@ -688,14 +700,15 @@ class LibraryTab(ctk.CTkFrame):
         if outstanding:
             parts = []
             if n_tags:
-                parts.append(f"{n_tags} tags")
+                parts.append(f"{n_tags} untagged")
             if n_probe:
-                parts.append(f"{n_probe} details")
+                parts.append(f"{n_probe} detail{'s' if n_probe != 1 else ''}")
             if n_thumb:
-                parts.append(f"{n_thumb} thumbs")
-            self.fix_btn.configure(text=f"Fix missing ({outstanding})",
-                                    fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
+                parts.append(f"{n_thumb} thumb{'s' if n_thumb != 1 else ''}")
             self._fix_breakdown = " · ".join(parts)
+            label = self._fix_breakdown if len(parts) == 1 else f"{outstanding} missing"
+            self.fix_btn.configure(text=f"Fix missing: {label}",
+                                    fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
         else:
             self.fix_btn.configure(text="Nothing missing", fg_color=T.BTN, text_color=T.FAINT)
             self._fix_breakdown = ""
@@ -926,6 +939,11 @@ class LibraryTab(ctk.CTkFrame):
     def _manage_hidden(self):
         HiddenTagsWindow(self.root, self)
 
+    def _toggle_sidebar_group(self, key: str):
+        self.cfg.sidebar_group_open[key] = not self.cfg.sidebar_group_open.get(key, True)
+        self.cfg.save()
+        self._render_tagpanel()
+
     def _render_tagpanel(self):
         for child in self.tagpanel.winfo_children():
             child.destroy()
@@ -955,11 +973,19 @@ class LibraryTab(ctk.CTkFrame):
             visible = [(n, c) for n, c in counter.most_common(60) if n not in hidden][:24]
             if not visible:
                 continue
-            ctk.CTkLabel(self.tagpanel, text=title, font=font(10, "bold"),
-                        text_color=T.FAINT, anchor="w"
-                        ).grid(row=row, column=0, sticky="ew", padx=10,
-                               pady=(12 if row else 8, 3))
+            key = title.lower()
+            open_now = self.cfg.sidebar_group_open.get(key, True)
+            header = ctk.CTkButton(
+                self.tagpanel,
+                text=("▾  " if open_now else "▸  ") + f"{title}   {len(visible)}",
+                height=26, corner_radius=6, font=font(10, "bold"), anchor="w",
+                fg_color=T.ELEVATED, hover_color=T.BTN_HOV, text_color=T.FAINT,
+                command=lambda k=key: self._toggle_sidebar_group(k))
+            header.grid(row=row, column=0, sticky="ew", padx=8,
+                        pady=(10 if row else 6, 2))
             row += 1
+            if not open_now:
+                continue
             for name, count in visible:
                 token = prefix + name
                 label = ctk.CTkButton(
@@ -1682,18 +1708,20 @@ class LibraryTab(ctk.CTkFrame):
                             f"thumbnailed and tagged{extra}.", T.OK)
             return
 
+        if not media:
+            # Nothing to probe/thumbnail - straight to tags, whose own
+            # status message already says what's happening. (Setting a
+            # "Fixing: N untagged" line here would just be overwritten in
+            # the same tick by _fetch_tags()'s own status.)
+            self._fetch_tags()
+            return
+
         bits = []
         if report["probe"]:
             bits.append(f"{len(report['probe'])} missing details")
         if report["thumbs"]:
             bits.append(f"{len(report['thumbs'])} missing thumbnails")
-        if report["tags"]:
-            bits.append(f"{len(report['tags'])} untagged")
         self.set_status("Fixing: " + ", ".join(bits), T.ACCENT2)
-
-        if not media:
-            self._fetch_tags()
-            return
 
         self.busy = True
         self.fix_btn.configure(state="disabled")
@@ -1742,27 +1770,18 @@ class LibraryTab(ctk.CTkFrame):
         if more_tags and self.cfg.e621_enabled:
             self._fetch_tags()
 
-    def _fetch_menu(self, event):
-        menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
-                       activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
-                       bd=0, font=(T.UI, 10))
-        menu.add_command(label="Refresh stale tags now (up to 300)…",
-                         command=self._refresh_stale_now)
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
-
-    def _fetch_tags(self, extra_budget: int | None = None):
+    def _fetch_tags(self, full: bool = False):
         """
-        Fetch every uncached post ID, then quietly fold in a bounded batch
-        of already-cached posts that are "due" for a soft refresh (see
-        E621Meta.is_stale) - fresh posts recheck every few days, old ones
-        every few months, so scores/tags stay roughly current without ever
-        re-fetching the whole library in one pass.
+        Fetch every uncached post ID, then fold in posts that are "due" for
+        a soft refresh (see E621Meta.is_stale) - fresh posts recheck every
+        few days, old ones every few months, so scores/tags stay roughly
+        current without re-fetching the whole library every time.
 
-        `extra_budget` overrides the configured ambient amount - used for
-        the manual "refresh stale now" catch-up.
+        Called two ways: quietly and automatically (tab open, after a
+        sync) with the small ambient budget from Settings, so new files
+        get tagged without you having to ask; or with `full=True` when you
+        press the Fetch button yourself, which lifts that budget entirely
+        and catches up every post that's due, not just a small batch of it.
         """
         if self.busy:
             return
@@ -1781,8 +1800,7 @@ class LibraryTab(ctk.CTkFrame):
                 seen.add(rec.pid)
                 todo.append(rec.pid)
 
-        budget = (extra_budget if extra_budget is not None
-                 else self.cfg.library_stale_refresh_budget)
+        budget = len(all_pids) if full else self.cfg.library_stale_refresh_budget
         refreshing = self.emeta.due_for_refresh(all_pids, budget, exclude=todo)
         todo.extend(refreshing)
 
@@ -1852,15 +1870,3 @@ class LibraryTab(ctk.CTkFrame):
         self.set_status("Tags fetched: " + " · ".join(bits),
                         T.OK if hits else (T.WARN if (missing or failed) else T.OK))
 
-    def _refresh_stale_now(self):
-        if not self.records:
-            self.set_status("Nothing to refresh yet - sync the library first.", T.WARN)
-            return
-        if not messagebox.askyesno(
-                "Refresh stale tags",
-                "Force a bigger catch-up pass now, re-checking up to 300 "
-                "already-tagged posts that are due for a refresh (instead "
-                "of the small amount folded into every regular fetch)?",
-                parent=self.root):
-            return
-        self._fetch_tags(extra_budget=300)

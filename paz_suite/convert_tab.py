@@ -124,7 +124,7 @@ class ConvertTab(ctk.CTkFrame):
         self.brand_sub.pack(side="left", padx=(12, 0), pady=(6, 0))
 
         self.pill = ctk.CTkFrame(left, fg_color=T.INPUT, corner_radius=11,
-                                  border_width=1, border_color=T.LINE, height=22)
+                                  border_width=1, border_color=T.ACCENT_DEEP, height=22)
         self.pill.pack(side="left", padx=(18, 0))
         self.pill_dot = ctk.CTkFrame(self.pill, width=7, height=7, corner_radius=4,
                                       fg_color=T.FAINT)
@@ -150,7 +150,7 @@ class ConvertTab(ctk.CTkFrame):
         panel.grid_columnconfigure(0, weight=1)
         panel.grid_rowconfigure(5, weight=1)
 
-        controls = Card(panel)
+        controls = Card(panel, border_color=T.ACCENT_DEEP)
         controls.grid(row=0, column=0, sticky="ew", padx=14, pady=(14, 8))
         controls.grid_columnconfigure(3, weight=1)
 

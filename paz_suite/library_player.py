@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import threading
 import tkinter as tk
 
 import customtkinter as ctk
@@ -32,6 +33,8 @@ class InlinePlayer:
         self.tab = tab
         self.rec = None
         self._dragging = False
+        self._peek_after = None
+        self._peek_token = 0
 
         self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.canvas = tk.Canvas(self.frame, width=self.VIEW_W, height=self.VIEW_H,
@@ -54,6 +57,8 @@ class InlinePlayer:
         self.bar.bind("<Button-1>", self._bar_press)
         self.bar.bind("<B1-Motion>", self._bar_press)
         self.bar.bind("<ButtonRelease-1>", self._bar_release)
+        self.bar.bind("<Motion>", self._bar_hover)
+        self.bar.bind("<Leave>", self._bar_leave)
 
         controls = ctk.CTkFrame(self.frame, fg_color="transparent")
         controls.pack(fill="x")
@@ -123,6 +128,7 @@ class InlinePlayer:
     def show_rec(self, rec) -> None:
         """Selection changed: stop whatever is playing, show the new thumb."""
         self.engine.stop()
+        self._peek_hide()
         self.rec = rec
         if rec is None:
             self.engine.clear()
@@ -247,6 +253,7 @@ class InlinePlayer:
     def _bar_press(self, event):
         if self.rec is None or self.engine.duration <= 0:
             return
+        self._peek_hide()
         self._dragging = True
         width = max(self.bar.winfo_width() - 4, 1)
         frac = max(0.0, min((event.x - 2) / width, 1.0))
@@ -259,3 +266,55 @@ class InlinePlayer:
         if self._dragging:
             self._dragging = False
             self.engine.seek(self.engine.position)
+
+    # ── hover preview (same YouTube-style scrub bubble as the gallery) ────
+
+    def _bar_hover(self, event):
+        if self._dragging or self.rec is None or self.engine.duration <= 0:
+            return
+        if self._peek_after is not None:
+            try:
+                self.bar.after_cancel(self._peek_after)
+            except ValueError:
+                pass
+        self._peek_after = self.bar.after(
+            90, lambda: self._peek_fetch(event.x, event.x_root, event.y_root))
+
+    def _bar_leave(self, _event=None):
+        self._peek_hide()
+
+    def _peek_fetch(self, x: int, x_root: int, y_root: int) -> None:
+        self._peek_after = None
+        rec = self.rec
+        if rec is None or self.engine.duration <= 0:
+            return
+        width = max(self.bar.winfo_width() - 4, 1)
+        frac = max(0.0, min((x - 2) / width, 1.0))
+        moment = frac * self.engine.duration
+        self._peek_token += 1
+        token = self._peek_token
+
+        def work():
+            data = self.tab.frames.frame(rec.path, moment, self.tab.peek.W)
+            if token != self._peek_token:
+                return
+            self.bar.after(0, lambda: self._peek_show(data, moment, token, x_root, y_root))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _peek_show(self, data, moment: float, token: int, x_root: int, y_root: int) -> None:
+        if token != self._peek_token or self.rec is None or self._dragging:
+            return
+        fraction = (moment / self.engine.duration) if self.engine.duration else None
+        self.tab.peek.show_frame(data, self.rec.name, fmt_clock(moment), x_root, y_root,
+                                 fraction=fraction)
+
+    def _peek_hide(self) -> None:
+        self._peek_token += 1
+        if self._peek_after is not None:
+            try:
+                self.bar.after_cancel(self._peek_after)
+            except ValueError:
+                pass
+            self._peek_after = None
+        self.tab.peek.hide()

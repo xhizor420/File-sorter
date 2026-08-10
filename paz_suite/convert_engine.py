@@ -60,16 +60,19 @@ def snap_target(cfg: AppConfig) -> int:
 
 def snap_applies(cfg: AppConfig, fps: float) -> bool:
     """
-    True when a near-miss source (58.5-59.99 for a 60 target) should be
-    resampled to exactly the target. Always on - 59.94 is just NTSC's way
-    of saying 60, so it's always treated as the real target rather than
-    failing the bar by a rounding hair. Never touches sources at or above
-    the target, so 120 fps footage is left alone.
+    True when a near-miss source (58.5 up to just under the target) should
+    be resampled to exactly the target. Always on - 59.94 is just NTSC's
+    way of saying 60, so it's always treated as the real target rather
+    than failing the bar by a rounding hair. The upper bound is a plain
+    `< target` (no epsilon fudge-factor) so nothing in that band - 59.94,
+    59.97, 59.999, whatever a container happens to report - slips through
+    uncaught. Never touches sources already at or above the target, so
+    120 fps footage is left alone.
     """
     if not fps:
         return False
     target = snap_target(cfg)
-    return (target - 1.5) <= fps < (target - 1e-3)
+    return (target - 1.5) <= fps < target
 
 
 def classify(cfg: AppConfig, width: int, height: int, fps: float) -> tuple:

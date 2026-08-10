@@ -96,10 +96,12 @@ class HelpWindow(ctk.CTkToplevel):
          "left. Right-click it for Verify library integrity, a slower "
          "full decode pass that catches corrupt files a quick probe can't."),
         ("Fetch e621 tags", "Resolves post IDs (the filename numbers) into "
-         "artist / character / species / rating. Add an API key in "
-         "Settings for fewer unavailable posts. Also quietly re-checks a "
-         "small batch of older, already-tagged posts each run so scores "
-         "stay current - right-click for a bigger on-demand catch-up pass."),
+         "artist / character / species / rating. A small batch runs "
+         "automatically when the tab opens and after every sync, so new "
+         "files get tagged without asking; pressing the button yourself "
+         "runs a full pass instead, catching up every post that's due for "
+         "a refresh, not just a small batch. Add an API key in Settings "
+         "for fewer unavailable posts."),
         ("Score, 4K ✓, Ratio", "▲ is the e621 upvote score - sort by it or "
          "use the Top rated button. 4K ✓ means a 4K/60+ copy exists. Ratio "
          "(next to Random) is a one-click Portrait / Widescreen / Square "

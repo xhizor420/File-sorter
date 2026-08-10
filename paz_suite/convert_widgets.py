@@ -65,8 +65,9 @@ class QueueTable(ctk.CTkFrame):
     on_menu = None
 
     def __init__(self, parent, on_select=None, on_activate=None, **kw):
+        kw.setdefault("border_color", T.ACCENT_DEEP)
         super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
-                          border_width=1, border_color=T.LINE, **kw)
+                          border_width=1, **kw)
         self.on_select = on_select
         self.on_activate = on_activate
         self._rows: dict = {}
