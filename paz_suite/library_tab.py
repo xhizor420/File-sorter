@@ -28,7 +28,7 @@ from .e621 import E621_POST
 from .library_db import db_connect, Rec, parse_query, rec_matches, SORTS
 from .library_player import InlinePlayer
 from .library_windows import (
-    BeatMarkers, PickSetsWindow, HiddenTagsWindow, HelpWindow, FoldersWindow,
+    PickSetsWindow, HiddenTagsWindow, HelpWindow, FoldersWindow,
 )
 from .widgets import PeekWindow
 
@@ -174,12 +174,6 @@ class LibraryTab(ctk.CTkFrame):
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
         self.sort_menu.pack(side="left", padx=(0, 8))
-
-        self.sync_studio_btn = ctk.CTkButton(
-            right, text="♪ Beats", width=82, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT2_DEEP,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._open_beats)
-        self.sync_studio_btn.pack(side="left", padx=(0, 8))
 
         self.help_btn = ctk.CTkButton(
             right, text="?", width=30, height=30, corner_radius=7,
@@ -518,7 +512,6 @@ class LibraryTab(ctk.CTkFrame):
 
         kbtn("Save set", self._picks_save_set, T.ACCENT2)
         kbtn("Load set", self._picks_load_set, T.ACCENT2)
-        kbtn("♪ Beat Markers", self._open_beats, T.ACCENT2)
         kbtn("Copy paths", self._picks_copy)
         kbtn("Export .m3u", self._picks_m3u, T.ACCENT)
         kbtn("Clear", self._picks_clear)
@@ -647,9 +640,6 @@ class LibraryTab(ctk.CTkFrame):
     def key_open_folders(self, event=None):
         self._open_folders()
 
-    def key_open_beats(self, event=None):
-        self._open_beats()
-
     def key_toggle_sidebar(self, event=None):
         self.toggle_sidebar()
 
@@ -694,9 +684,6 @@ class LibraryTab(ctk.CTkFrame):
 
     def _open_folders(self):
         FoldersWindow(self.root, self)
-
-    def _open_beats(self):
-        BeatMarkers(self.root, self)
 
     def _open_settings(self):
         self.app.open_settings(initial_tab="Library")
@@ -1745,7 +1732,12 @@ class LibraryTab(ctk.CTkFrame):
                     make_thumb(path, duration, self.cfg.thumb_width)
                     return path, (duration, width, height, fps)
 
-                with ThreadPoolExecutor(max_workers=3) as pool:
+                # Each job is two ffmpeg/ffprobe calls (probe + thumbnail),
+                # so this stays a bit below the probe-only pool sizes used
+                # elsewhere - plenty of parallelism without saturating disk
+                # I/O on a first-time build of a large library.
+                workers = min(6, max(2, os.cpu_count() or 4))
+                with ThreadPoolExecutor(max_workers=workers) as pool:
                     futures = [pool.submit(job, p) for p in todo]
                     for future in as_completed(futures):
                         path, (duration, width, height, fps) = future.result()

@@ -1057,31 +1057,46 @@ class ConvertTab(ctk.CTkFrame):
             self.logview.write(self.F("nothing_msg"), "info")
 
     def _probe_queue(self):
+        """
+        Fill in resolution/length/size for every queued file.
+
+        Probing is I/O-bound (each call spawns ffprobe), so a handful run
+        in parallel instead of one at a time - a queue of a few hundred
+        files fills in noticeably faster on any multi-core machine.
+        """
         pending = [t for t in self.tasks.values() if t.info is None]
+        if not pending:
+            return
+        workers = min(8, max(2, (os.cpu_count() or 4)))
+
+        def probe_one(task):
+            return task, probe(task.source)
 
         def work():
             total_seconds = 0.0
             total_bytes = 0
-            for task in pending:
-                info = probe(task.source)
-                if info is None:
-                    continue
-                total_seconds += info.duration
-                total_bytes += info.size
-                task.info = info
-                task.seconds = info.duration
-                _root, label = classify(self.cfg, info.width, info.height, info.fps)
-                fps_text = info.fps_text + (" ~" if info.vfr else "")
-                dur_text = fmt_clock(info.duration)
-                if self.cfg.loop_short and 0 < info.duration < self.cfg.loop_min:
-                    import math as _math
-                    copies = int(_math.ceil(self.cfg.loop_min / info.duration))
-                    dur_text += f" ×{copies}"
-                self.ui(self.table.set_row, task.iid,
-                        res=info.resolution, fps=fps_text, dur=dur_text,
-                        size=fmt_size(info.size), dest="→ " + label,
-                        _res=info.width * info.height, _fps=info.fps,
-                        _dur=info.duration, _size=info.size)
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(probe_one, task) for task in pending]
+                for future in as_completed(futures):
+                    task, info = future.result()
+                    if info is None:
+                        continue
+                    total_seconds += info.duration
+                    total_bytes += info.size
+                    task.info = info
+                    task.seconds = info.duration
+                    _root, label = classify(self.cfg, info.width, info.height, info.fps)
+                    fps_text = info.fps_text + (" ~" if info.vfr else "")
+                    dur_text = fmt_clock(info.duration)
+                    if self.cfg.loop_short and 0 < info.duration < self.cfg.loop_min:
+                        import math as _math
+                        copies = int(_math.ceil(self.cfg.loop_min / info.duration))
+                        dur_text += f" ×{copies}"
+                    self.ui(self.table.set_row, task.iid,
+                            res=info.resolution, fps=fps_text, dur=dur_text,
+                            size=fmt_size(info.size), dest="→ " + label,
+                            _res=info.width * info.height, _fps=info.fps,
+                            _dur=info.duration, _size=info.size)
             if not self.processing and total_seconds:
                 self.ui(self.readout.configure,
                         text=f"{len(pending)} queued · "

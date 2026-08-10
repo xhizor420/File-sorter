@@ -37,7 +37,12 @@ class PazApp:
         self._icon_neutral = None
 
         root.geometry("1760x1020")
-        root.minsize(1280, 760)
+        # Every panel below (gallery columns, the inspector/player, the
+        # queue table) already recalculates its own layout on resize, so
+        # this is a floor for legibility, not a hard requirement - the
+        # window is just as usable maximized on a 4K display as tiled on a
+        # 13" laptop screen.
+        root.minsize(1180, 700)
         root.configure(fg_color=T.BG)
 
         self.tabview = ctk.CTkTabview(
@@ -168,7 +173,6 @@ class PazApp:
             root.bind(key, lambda e: self._only_evt("Library", self.library.key_size, e))
         root.bind("<Return>", lambda e: self._only_evt("Library", self.library.key_play, e))
         root.bind("<Control-o>", lambda e: self._only("Library", self.library.key_open_folders))
-        root.bind("<Control-b>", lambda e: self._only("Library", self.library.key_open_beats))
         root.bind("<Control-l>", lambda e: self._only("Library", self.library.key_toggle_sidebar))
         root.bind("<Control-t>", lambda e: self._only("Library", self.library.key_toggle_theater))
         root.bind("<Control-Shift-R>",

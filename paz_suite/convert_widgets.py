@@ -8,6 +8,7 @@ import io
 import os
 import threading
 import tkinter as tk
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
@@ -18,6 +19,7 @@ from .format import fmt_clock, fmt_size
 from .files import open_file, open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow
+from .player_engine import ClipPlayer, HAS_FFPLAY
 
 STATE_COLOURS = {
     "queued":    T.FAINT,
@@ -421,7 +423,14 @@ class ScrubPreview(ctk.CTkFrame):
                                height=340)
         self.view.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 6))
         self.view.bind("<Configure>", self._on_view_resize)
-        self.view.bind("<Button-1>", lambda e: self.toggle_skim())
+        self.view.bind("<Button-1>", lambda e: self.toggle_play())
+
+        # Real playback (with audio) shares the same view canvas as the
+        # static scrub/skim frames - only one is ever active at a time.
+        self.player_engine = ClipPlayer(
+            self.view, 480, 270, get_discreet=self.is_discreet,
+            on_tick=self._on_play_tick, on_state=self._on_play_state,
+            on_fail=self._on_play_fail)
 
         self.timeline = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
                                    borderwidth=0, height=26, cursor="sb_h_double_arrow")
@@ -452,6 +461,14 @@ class ScrubPreview(ctk.CTkFrame):
                 font=font(12), fg_color=T.BTN, hover_color=T.BTN_HOV,
                 text_color=T.DIM, command=command)
 
+        self.play_btn = ctk.CTkButton(
+            transport, text="▶ Play", width=68, height=26, corner_radius=6,
+            font=font(12), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.ACCENT, command=self.toggle_play)
+        self.play_btn.pack(side="left", padx=(0, 4))
+        self.mute_btn = tbtn("🔇" if not HAS_FFPLAY else "🔊", self._toggle_mute, width=30)
+        self.mute_btn.configure(state="normal" if HAS_FFPLAY else "disabled")
+        self.mute_btn.pack(side="left", padx=(0, 8))
         tbtn("◀", lambda: self.step(-1)).pack(side="left", padx=(0, 4))
         self.skim_btn = tbtn("▶ Skim", self.toggle_skim, width=70)
         self.skim_btn.pack(side="left", padx=(0, 4))
@@ -484,6 +501,7 @@ class ScrubPreview(ctk.CTkFrame):
 
     def clear(self, message: str = "Nothing loaded") -> None:
         self.stop_skim()
+        self.player_engine.clear()
         self._ghost_hide()
         self._token += 1
         self._strip_token += 1
@@ -517,6 +535,7 @@ class ScrubPreview(ctk.CTkFrame):
             return
 
         self.stop_skim()
+        self.player_engine.stop()
         self._ghost_hide()
         self._paths = paths
         self._active = prefer if prefer in paths else next(iter(paths))
@@ -559,6 +578,10 @@ class ScrubPreview(ctk.CTkFrame):
             self._pos = max(0.0, min(position, max(duration - 0.05, 0.0)))
         else:
             self._pos = min(duration * 0.25, 3.0) if duration else 0.0
+        path = self._current_path()
+        if path:
+            self.player_engine.load(path, duration, info.fps if info else 30.0)
+            self.player_engine.position = self._pos
         self._update_meta()
         self._draw_timeline()
         self._request_frame(immediate=True)
@@ -568,6 +591,7 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._paths:
             return
         self.stop_skim()
+        self.player_engine.pause()
         duration = self._info.duration if self._info else 0.0
         limit = max(duration - 0.05, 0.0) if duration else self._pos + abs(delta)
         self._pos = max(0.0, min(self._pos + delta, limit))
@@ -591,6 +615,7 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._paths:
             return
         self.stop_skim()
+        self.player_engine.pause()
         duration = self._duration()
         limit = max(duration - 0.05, 0.0) if duration else seconds
         self._pos = max(0.0, min(seconds, limit))
@@ -604,9 +629,40 @@ class ScrubPreview(ctk.CTkFrame):
         if value not in self._paths:
             self.switch.set(self._active)
             return
+        self.player_engine.stop()
         keep = self._pos
         self._active = value
         self._probe_async(keep)
+
+    # ── real playback (shares the view canvas with the static scrubber) ────
+
+    def toggle_play(self) -> None:
+        if not self._current_path() or not self._duration():
+            return
+        self.stop_skim()
+        self._ghost_hide()
+        self._sync_player_size(self.view.winfo_width(), self.view.winfo_height())
+        if not self.player_engine.playing:
+            self.player_engine.position = self._pos
+        self.player_engine.toggle()
+
+    def _toggle_mute(self) -> None:
+        muted = self.player_engine.toggle_mute()
+        self.mute_btn.configure(text="🔇" if muted else "🔊",
+                                text_color=T.FAINT if muted else T.TEXT)
+
+    def _on_play_state(self, playing: bool) -> None:
+        self.play_btn.configure(
+            text="⏸ Pause" if playing else "▶ Play",
+            fg_color=T.ACCENT_DEEP if playing else T.BTN,
+            text_color=T.ACCENT)
+
+    def _on_play_tick(self, position: float) -> None:
+        self._pos = position
+        self._draw_timeline()
+
+    def _on_play_fail(self, message: str) -> None:
+        self.set_note(message)
 
     def _update_meta(self) -> None:
         if not self._info:
@@ -619,12 +675,28 @@ class ScrubPreview(ctk.CTkFrame):
         self.meta.configure(text="  ·  ".join(bits))
 
     def _on_view_resize(self, event) -> None:
+        self._sync_player_size(event.width, event.height)
+        if self.player_engine.playing:
+            return
         if self._image_ref is not None:
             self.view.delete("all")
             self.view.create_image(event.width // 2, event.height // 2,
                                     image=self._image_ref, anchor="center")
         else:
             self._redraw_placeholder()
+
+    def _sync_player_size(self, width: int, height: int) -> None:
+        """Keep the playback engine's decode size roughly matched to the
+        canvas. Skipped while actively playing to avoid restarting the
+        decoder on every pixel of a window drag; takes effect on the next
+        Play press instead."""
+        if self.player_engine.playing:
+            return
+        width = max(int(width) - 4, 100) // 2 * 2
+        height = max(int(height) - 4, 100)
+        self.player_engine.view_w = width
+        self.player_engine.view_h = height
+        self.player_engine.frame_bytes = width * height * 3
 
     def _redraw_placeholder(self) -> None:
         if self._image_ref is not None:
@@ -751,6 +823,7 @@ class ScrubPreview(ctk.CTkFrame):
             return
         self._ghost_hide()
         self.stop_skim()
+        self.player_engine.pause()
         self._dragging = True
         self._pos = self._time_at(event.x)
         self._draw_timeline()
@@ -909,6 +982,7 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._strip_marks:
             return
         self.stop_skim()
+        self.player_engine.pause()
         cell_w, _, gap = self._cell_geometry()
         if cell_w <= 0:
             return
@@ -927,6 +1001,7 @@ class ScrubPreview(ctk.CTkFrame):
     def start_skim(self) -> None:
         if not self._strip_marks or not self._current_path():
             return
+        self.player_engine.pause()
         self._skim = True
         self.skim_btn.configure(text="■ Stop", text_color=T.ACCENT,
                                  fg_color=T.ACCENT_DEEP)
@@ -1162,16 +1237,20 @@ class DuplicateWindow(ctk.CTkToplevel):
         self._say(f"Probing {len(files)} clips")
 
         buckets: dict = {}
-        for index, path in enumerate(files):
-            if not self.alive:
-                return
-            info = probe(path)
-            if not info or info.duration <= 0:
-                continue
-            key = int(info.duration * 5)
-            buckets.setdefault(key, []).append((path, info))
-            if index % 40 == 0:
-                self._say(f"Probing {index}/{len(files)}")
+        workers = min(8, max(2, os.cpu_count() or 4))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(probe, path): path for path in files}
+            for index, future in enumerate(as_completed(futures)):
+                if not self.alive:
+                    return
+                path = futures[future]
+                info = future.result()
+                if not info or info.duration <= 0:
+                    continue
+                key = int(info.duration * 5)
+                buckets.setdefault(key, []).append((path, info))
+                if index % 40 == 0:
+                    self._say(f"Probing {index}/{len(files)}")
 
         candidates = []
         for key, members in buckets.items():

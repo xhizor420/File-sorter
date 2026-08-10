@@ -1,431 +1,21 @@
-"""Library-tab dialog windows: beat markers for Resolve, saved pick sets,
-hidden-tag management, the help reference, and the folder picker.
+"""Library-tab dialog windows: saved pick sets, hidden-tag management, the
+help reference, and the folder picker.
 """
 
 from __future__ import annotations
 
 import os
-import threading
 import tkinter as tk
 from tkinter import filedialog
 
 import customtkinter as ctk
 
 from .theme import T, font
-from .format import fmt_len
-from .files import is_ignored_dir, open_file, open_in_explorer
-
-try:
-    import paz_beats
-    BEATS_IMPORT_ERROR = ""
-except ModuleNotFoundError as _exc:
-    paz_beats = None
-    BEATS_IMPORT_ERROR = (f"{_exc.name} is missing. Beat Markers needs "
-                           f"paz_beats.py on the Python path, plus numpy.")
-except Exception as _exc:  # pragma: no cover - defensive
-    paz_beats = None
-    BEATS_IMPORT_ERROR = f"paz_beats could not load: {_exc}"
-
-
-class BeatMarkers(ctk.CTkToplevel):
-    """
-    BPM and beat markers for DaVinci Resolve. That is the whole job.
-
-    Pick a song, press Analyse, save. You get four files that all describe
-    the same markers, so whichever route Resolve likes on your machine, the
-    grid is identical.
-    """
-
-    def __init__(self, parent, tab):
-        super().__init__(parent)
-        self.tab = tab
-        self.song = None
-        self.accents = None
-        self.busy = False
-        self.title("Beat Markers - BPM grid for Resolve")
-        self.geometry("760x620")
-        self.configure(fg_color=T.BG)
-        self.transient(parent)
-        self.after(120, self.lift)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
-
-        self.beats = None
-        self.error = ""
-        if paz_beats is None:
-            self.error = BEATS_IMPORT_ERROR
-        else:
-            self.beats = paz_beats
-
-        eng = ctk.CTkFrame(self, fg_color=T.ELEVATED, corner_radius=12,
-                            border_width=1, border_color=T.LINE)
-        eng.grid(row=0, column=0, sticky="ew", padx=16, pady=(16, 6))
-        eng.grid_columnconfigure(0, weight=1)
-        self.engine_label = ctk.CTkLabel(
-            eng, text="", font=font(11), text_color=T.DIM, anchor="w",
-            justify="left", wraplength=560)
-        self.engine_label.grid(row=0, column=0, sticky="ew", padx=12, pady=(10, 2))
-        self.engine_btn = ctk.CTkButton(
-            eng, text="Copy install command", width=160, height=26,
-            corner_radius=6, font=font(10), fg_color=T.BTN,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT,
-            command=self._copy_install)
-        self.engine_btn.grid(row=0, column=1, padx=(0, 12))
-        self._refresh_engine()
-
-        card = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=12,
-                             border_width=1, border_color=T.LINE)
-        card.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 8))
-        ctk.CTkLabel(card, text="SONG", font=font(10, "bold"),
-                     text_color=T.FAINT, anchor="w").pack(fill="x", padx=12,
-                                                           pady=(10, 6))
-        row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=12, pady=(0, 12))
-        row.grid_columnconfigure(0, weight=1)
-        self.song_entry = ctk.CTkEntry(
-            row, height=34, font=font(11, mono=True), fg_color=T.INPUT,
-            border_color=T.LINE, border_width=1, text_color=T.TEXT,
-            placeholder_text="the track you are cutting to")
-        self.song_entry.grid(row=0, column=0, sticky="ew")
-        ctk.CTkButton(row, text="Browse", width=80, height=34, corner_radius=7,
-                      font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-                      text_color=T.DIM, command=self._browse
-                      ).grid(row=0, column=1, padx=(8, 0))
-
-        opts = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=12,
-                             border_width=1, border_color=T.LINE)
-        opts.grid(row=2, column=0, sticky="ew", padx=16, pady=(0, 8))
-        inner = ctk.CTkFrame(opts, fg_color="transparent")
-        inner.pack(fill="x", padx=12, pady=12)
-        ctk.CTkLabel(inner, text="Timeline fps", font=font(11),
-                     text_color=T.DIM, width=110, anchor="w"
-                     ).grid(row=0, column=0, sticky="w")
-        self.fps = ctk.CTkOptionMenu(
-            inner, values=["60", "30", "24", "23.976", "25", "50", "120"],
-            width=110, height=30, font=font(11), corner_radius=7,
-            fg_color=T.INPUT, button_color=T.LINE,
-            button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
-            text_color=T.TEXT)
-        self.fps.set("60")
-        self.fps.grid(row=0, column=1, sticky="w")
-        ctk.CTkLabel(inner, text="match your Resolve timeline exactly",
-                     font=font(10), text_color=T.FAINT
-                     ).grid(row=0, column=2, sticky="w", padx=(12, 0))
-        self.bars_only = ctk.CTkSwitch(
-            inner, text="Bars only  (recommended - real PMVs cut about "
-                        "every 1-2 bars)", font=font(11),
-            text_color=T.DIM, progress_color=T.ACCENT2, button_color=T.TEXT)
-        self.bars_only.select()
-        self.bars_only.grid(row=1, column=0, columnspan=3, sticky="w", pady=(10, 0))
-        self.accents_sw = ctk.CTkSwitch(
-            inner, text="Mark HITs, DROPs and BUILDs (where effects go)",
-            font=font(11), text_color=T.DIM, progress_color=T.ACCENT,
-            button_color=T.TEXT)
-        self.accents_sw.select()
-        self.accents_sw.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
-
-        info = ctk.CTkFrame(self, fg_color="transparent")
-        info.grid(row=3, column=0, sticky="ew", padx=16)
-        self.summary = ctk.CTkLabel(info, text="No song analysed yet",
-                                     font=font(13, "bold"), text_color=T.FAINT,
-                                     anchor="w")
-        self.summary.pack(fill="x")
-        self.bar_canvas = tk.Canvas(info, height=40, bg=T.INPUT,
-                                     highlightthickness=0, bd=0)
-        self.bar_canvas.pack(fill="x", pady=(6, 0))
-
-        actions = ctk.CTkFrame(self, fg_color="transparent")
-        actions.grid(row=5, column=0, sticky="ew", padx=16, pady=(10, 0))
-        self.analyse_btn = ctk.CTkButton(
-            actions, text="Analyse song", width=130, height=34,
-            corner_radius=7, font=font(11, "bold"), fg_color=T.ACCENT2_DEEP,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT2, command=self._analyse)
-        self.analyse_btn.pack(side="left", padx=(0, 8))
-        self.rb_btn = ctk.CTkButton(
-            actions, text="From rekordbox…", width=140, height=34,
-            corner_radius=7, font=font(11), fg_color=T.BTN,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-            command=self._use_rekordbox)
-        self.rb_btn.pack(side="left", padx=(0, 8))
-        self.preview_btn = ctk.CTkButton(
-            actions, text="Preview grid", width=130, height=34,
-            corner_radius=7, font=font(11), fg_color=T.BTN,
-            hover_color=T.BTN_HOV, text_color=T.OK, state="disabled",
-            command=self._preview)
-        self.preview_btn.pack(side="left", padx=(0, 8))
-        self.save_btn = ctk.CTkButton(
-            actions, text="Save markers", width=140, height=34,
-            corner_radius=7, font=font(11, "bold"), fg_color=T.ACCENT_DEEP,
-            hover_color=T.BTN_HOV, text_color=T.ACCENT, state="disabled",
-            command=self._save)
-        self.save_btn.pack(side="left")
-
-        self.log = tk.Text(self, height=13, bg=T.INPUT, fg=T.DIM, bd=0,
-                            highlightthickness=0, font=(T.MONO, 9),
-                            wrap="word", padx=10, pady=8)
-        self.log.grid(row=4, column=0, sticky="nsew", padx=16, pady=(10, 0))
-        for name, colour in (("ok", T.OK), ("warn", T.WARN),
-                              ("fail", T.FAIL), ("accent", T.ACCENT)):
-            self.log.tag_configure(name, foreground=colour)
-        self.log.configure(state="disabled")
-        self.grid_rowconfigure(4, weight=1)
-
-        if self.error:
-            self._log(self.error, T.FAIL)
-        else:
-            engines = self.beats.available_backends()
-            self._log("Choose a song and press Analyse. You will get four "
-                       "files describing the same grid - use whichever your "
-                       "Resolve is happiest with.", T.DIM)
-            self._log(f"Beat engines available: {', '.join(engines)}", T.DIM)
-            if engines == ["builtin"]:
-                self._log("Optional upgrade for tricky songs: "
-                          "pip install beat-this", T.DIM)
-
-    def _log(self, text, colour=None):
-        tag = {T.OK: "ok", T.WARN: "warn", T.FAIL: "fail",
-               T.ACCENT: "accent"}.get(colour, "")
-        self.log.configure(state="normal")
-        self.log.insert("end", text + "\n", tag)
-        self.log.see("end")
-        self.log.configure(state="disabled")
-
-    def ui(self, fn, *a, **k):
-        try:
-            self.after(0, lambda: fn(*a, **k))
-        except (tk.TclError, RuntimeError):
-            pass
-
-    def _refresh_engine(self):
-        if self.beats is None:
-            self.engine_label.configure(text=self.error, text_color=T.FAIL)
-            self.engine_btn.configure(state="disabled")
-            return
-        rep = self.beats.engine_report()
-        self._engine_report = rep
-        if rep["is_best_possible"]:
-            self.engine_label.configure(
-                text=f"Engine: Beat This!  (best available · running on "
-                     f"{rep['device']})", text_color=T.OK)
-            self.engine_btn.configure(state="disabled", text="Best engine ✓",
-                                       text_color=T.OK)
-        else:
-            self.engine_label.configure(
-                text=f"Engine: {rep['best']}  —  the most accurate tracker "
-                     f"published (Beat This!, 88.9% F-measure) is not "
-                     f"installed. One command in a terminal fixes it, then "
-                     f"reopen this window.", text_color=T.WARN)
-            self.engine_btn.configure(state="normal")
-
-    def _copy_install(self):
-        rep = getattr(self, "_engine_report", None)
-        if not rep:
-            return
-        command = rep["install"]["beat_this"]
-        self.clipboard_clear()
-        self.clipboard_append(command)
-        self._log("\nInstall command copied to the clipboard:", T.ACCENT)
-        self._log(f"  {command}", T.DIM)
-        self._log("Run it, then close and reopen Beat Markers.", T.DIM)
-
-    def _use_rekordbox(self):
-        path = self.song_entry.get().strip()
-        if not os.path.isfile(path):
-            self._log("Choose the song file first.", T.WARN)
-            return
-        xml = filedialog.askopenfilename(
-            parent=self, title="rekordbox collection XML",
-            filetypes=[("rekordbox XML", "*.xml"), ("All files", "*.*")])
-        if not xml:
-            return
-        try:
-            song = self.beats.analyse_song_rekordbox(path, xml)
-        except Exception as exc:
-            self._log(f"rekordbox import failed: {exc}", T.FAIL)
-            return
-        self.song = song
-        self.accents = self.beats.find_accents(song, path)
-        self._log("\nGrid taken from rekordbox - this is the one you "
-                  "verified by eye, so it is as good as your check was.", T.OK)
-        self._ready(song)
-
-    def _browse(self):
-        path = filedialog.askopenfilename(
-            parent=self, title="Choose the track",
-            filetypes=[("Audio", "*.mp3 *.wav *.flac *.m4a *.aac *.ogg *.opus"),
-                       ("All files", "*.*")])
-        if path:
-            self.song_entry.delete(0, tk.END)
-            self.song_entry.insert(0, path)
-
-    def _analyse(self):
-        if self.busy or self.beats is None:
-            if self.beats is None:
-                self._log(self.error, T.FAIL)
-            return
-        path = self.song_entry.get().strip()
-        if not os.path.isfile(path):
-            self._log("Choose a song file first.", T.WARN)
-            return
-        self.busy = True
-        self.analyse_btn.configure(state="disabled")
-        self._log(f"\nAnalysing {os.path.basename(path)}...", T.ACCENT)
-
-        def work():
-            try:
-                song = self.beats.analyse_song_best(path)
-                self.accents = self.beats.find_accents(song, path)
-                if not song.bpm or not song.beats:
-                    self.ui(self._log, "Could not read a tempo from that file.", T.FAIL)
-                    return
-                self.song = song
-                self.ui(self._ready, song)
-            except Exception as exc:
-                self.ui(self._log, f"Failed: {exc}", T.FAIL)
-            finally:
-                self.busy = False
-                self.ui(self.analyse_btn.configure, state="normal")
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _ready(self, song):
-        import numpy as np
-        gaps = np.diff(song.beats) if len(song.beats) > 1 else np.array([0.0])
-        self.summary.configure(
-            text=f"{song.bpm:.2f} BPM   ·   {len(song.beats)} beats   ·   "
-                 f"{len(song.downbeats)} bars   ·   {fmt_len(song.duration)}",
-            text_color=T.TEXT)
-        self._log(f"  {song.bpm:.2f} BPM, {len(song.beats)} beats, "
-                  f"{len(song.sections)} sections  "
-                  f"[engine: {getattr(song, 'engine', 'builtin')}]", T.OK)
-        drift = gaps.std() * 1000
-        self._log(f"  beat spacing {gaps.mean():.4f}s (drift {drift:.0f} ms)",
-                  T.DIM if drift < 25 else T.WARN)
-        if drift > 25:
-            self._log("  Beats drift a lot here - the tempo may vary. "
-                      "Installing a trained tracker usually fixes this: "
-                      "pip install beat-this", T.WARN)
-        if self.accents:
-            self._log(f"  {len(self.accents['hits'])} strong hits · "
-                      f"{len(self.accents['drops'])} drops · "
-                      f"{len(self.accents['builds'])} builds", T.ACCENT)
-            per_min = len(song.downbeats) / max(song.duration / 60, 0.01)
-            self._log(f"  bar markers land {per_min:.0f}/min; the PMVs "
-                      f"measured cut about 23/min, so expect to use every "
-                      f"bar or every other one.", T.DIM)
-        self._draw(song)
-        self.save_btn.configure(state="normal")
-        self.preview_btn.configure(state="normal")
-        self._log("  Tip: press Preview grid first - 30 seconds of "
-                  "listening tells you if the markers are on the music.", T.DIM)
-
-    def _draw(self, song):
-        c = self.bar_canvas
-        c.delete("all")
-        c.update_idletasks()
-        width = max(c.winfo_width(), 200)
-        if song.duration <= 0:
-            return
-        for start, end, energy in song.sections:
-            x0 = start / song.duration * width
-            x1 = end / song.duration * width
-            c.create_rectangle(x0, 0, x1, 40,
-                                fill=T.ACCENT_DEEP if energy > 0.66 else T.ELEVATED,
-                                outline="")
-        for beat in song.downbeats:
-            x = beat / song.duration * width
-            c.create_line(x, 0, x, 16, fill=T.ACCENT, width=1)
-
-    def _preview(self):
-        if not self.song or self.busy:
-            return
-        import tempfile
-        out = os.path.join(tempfile.gettempdir(), "paz_beat_preview.mp4")
-        try:
-            fps = int(round(float(self.fps.get())))
-        except ValueError:
-            fps = 60
-        use_accents = self.accents if bool(self.accents_sw.get()) else None
-        self.busy = True
-        self.preview_btn.configure(state="disabled")
-        self._log("\nRendering a 30-second preview...", T.ACCENT)
-
-        def work():
-            try:
-                ok = self.beats.render_preview(
-                    self.song, out, accents=use_accents, seconds=30,
-                    fps=fps, every_beat=not bool(self.bars_only.get()))
-                if ok:
-                    self.ui(self._log,
-                            "  Low thud = bar · tick = beat · bright click = "
-                            "HIT · noise burst = DROP.", T.OK)
-                    self.ui(self._log,
-                            "  If those land on the music, the grid is right "
-                            "and you can Save with confidence.", T.DIM)
-                    open_file(out)
-                else:
-                    self.ui(self._log, "  Preview render failed - ffmpeg may "
-                                       "be missing from PATH.", T.WARN)
-            except Exception as exc:
-                self.ui(self._log, f"  Preview failed: {exc}", T.FAIL)
-            finally:
-                self.busy = False
-                self.ui(self.preview_btn.configure, state="normal")
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _save(self):
-        if not self.song:
-            return
-        stem = filedialog.asksaveasfilename(
-            parent=self, title="Save markers as (name only)",
-            initialfile=os.path.splitext(os.path.basename(self.song.path))[0] + "_beats")
-        if not stem:
-            return
-        stem = os.path.splitext(stem)[0]
-        try:
-            fps = float(self.fps.get())
-        except ValueError:
-            fps = 60.0
-        fps_i = int(round(fps))
-        try:
-            use_accents = self.accents if bool(self.accents_sw.get()) else None
-            files = self.beats.export_all(
-                self.song, stem, fps=fps_i,
-                every_beat=not bool(self.bars_only.get()), accents=use_accents)
-            count = len(self.beats.build_markers(
-                self.song, every_beat=not bool(self.bars_only.get()),
-                accents=use_accents, fps=fps_i))
-        except Exception as exc:
-            self._log(f"Could not write: {exc}", T.FAIL)
-            return
-
-        self._log(f"\n{count} markers written at {fps_i} fps:", T.OK)
-        self._log(f"  1  {os.path.basename(files['resolve_script'])}", T.ACCENT)
-        self._log("     BEST. Open your timeline in Resolve, then Workspace >"
-                  " Scripts and run this. Nothing is imported, so no media "
-                  "can be missing.", T.DIM)
-        self._log(f"  2  {os.path.basename(files['beatgrid_xml'])}", T.ACCENT)
-        self._log("     File > Import > Timeline. Contains the song and the "
-                  "markers, nothing else.", T.DIM)
-        self._log(f"  3  {os.path.basename(files['markers_edl'])}", T.ACCENT)
-        self._log("     For a timeline you already built: Timeline > Import >"
-                  " Timeline Markers from EDL.", T.DIM)
-        self._log(f"  4  {os.path.basename(files['markers_csv'])}", T.ACCENT)
-        self._log("     Plain timecode list.", T.DIM)
-        self._log(f"  Set the Resolve timeline to {fps_i} fps, start "
-                  f"timecode 01:00:00:00.", T.WARN)
-        self._log("  Red = bar (safe cut) · Blue = beat · Pink = HIT "
-                  "(flash/zoom/switch) · Yellow = DROP · Cyan = BUILD "
-                  "(riser) · Green = section", T.DIM)
-        try:
-            open_in_explorer(files["resolve_script"])
-        except Exception:
-            pass
+from .files import is_ignored_dir
 
 
 class PickSetsWindow(ctk.CTkToplevel):
-    """Saved shortlists - one per PMV."""
+    """Saved shortlists, one per project."""
 
     def __init__(self, parent, tab):
         super().__init__(parent)
@@ -437,7 +27,7 @@ class PickSetsWindow(ctk.CTkToplevel):
         self.after(120, self.lift)
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(self, text="Each set is one PMV's shortlist. Loading a "
+        ctk.CTkLabel(self, text="Each set is a saved shortlist. Loading a "
                                 "set replaces the current picks.",
                      font=font(11), text_color=T.FAINT, wraplength=470,
                      justify="left", anchor="w"
@@ -569,26 +159,16 @@ class HelpWindow(ctk.CTkToplevel):
          "IDs (the filename numbers) into artist / character / species / "
          "rating via e621's API. Add your API key in Settings for fewer "
          "unavailable posts."),
-        ("Picks", "A shortlist for editing. Press P on a clip (or right-click "
-         "> Add to Picks), collect as many as you want, then Copy paths or "
-         "Export .m3u straight into your editor or player."),
-        ("PMV workflow", "Browse the library, press P on the clips you want "
-         "(★ Pick page adds a whole page), then Save set and name it - one "
-         "saved shortlist per PMV. Use Beat Markers for the BPM grid in "
-         "Resolve, then cut by hand against it."),
-        ("Pick sets", "Named shortlists, one per PMV. Save set / Load set "
-         "sit in the Picks bar, so you can switch between edits without "
-         "re-picking."),
-        ("Beat markers (song only)", "The draft-friendly path: choose a "
-         "song, press Analyse, then export. You get a _beatgrid.xml "
-         "containing ONLY the song plus a marker on every bar and beat - "
-         "import it as a timeline and no media can be missing, because no "
-         "video is referenced. Build your own edit on V1 over the grid."),
-        ("♪ Beat Markers", "Ctrl+B. Pick a song, press Analyse, press Save. "
-         "You get four files describing the same markers: a Resolve script "
-         "(best - run it from Workspace > Scripts with your timeline open, "
-         "nothing is imported), a song-only beatgrid.xml, a marker EDL, and "
-         "a CSV."),
+        ("Picks", "A shortlist for whatever you're doing next - editing, "
+         "reviewing, exporting. Press P on a clip (or right-click > Add to "
+         "Picks), collect as many as you want, then Copy paths or Export "
+         ".m3u straight into your editor or player."),
+        ("Building a shortlist", "Browse the library, press P on the clips "
+         "you want (★ Pick page adds a whole page), then Save set and name "
+         "it - one saved shortlist per project. Load it again any time from "
+         "the Picks bar."),
+        ("Pick sets", "Named shortlists. Save set / Load set sit in the "
+         "Picks bar, so you can switch between projects without re-picking."),
         ("▲ Score", "The e621 upvote score for that post, next to the fps on "
          "every card. Sort by it with the Top rated chip, or the Score sort."),
         ("4K ✓", "Shown when a 4K/60+ copy of that exact file exists in the "
@@ -611,9 +191,8 @@ class HelpWindow(ctk.CTkToplevel):
          "button lists them, and ✕ clears the box."),
         ("Keys", "/ search · Enter or Space play/pause · ←→ seek 5s · "
          "P pick · R random · PgUp/PgDn pages · 1-4 tile size · Ctrl+L "
-         "collapse tags · Ctrl+C copy name · Ctrl+F search · Ctrl+B beat "
-         "markers · F5 sync · Ctrl+O folders · Ctrl+T theater · Ctrl+D "
-         "discreet · F12 hide"),
+         "collapse tags · Ctrl+C copy name · Ctrl+F search · F5 sync · "
+         "Ctrl+O folders · Ctrl+T theater · Ctrl+D discreet · F12 hide"),
     )
 
     def __init__(self, parent):
