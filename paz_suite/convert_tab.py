@@ -256,27 +256,47 @@ class ConvertTab(ctk.CTkFrame):
         self.table.on_menu = self._build_menu
         self.table.grid(row=5, column=0, sticky="nsew", padx=14, pady=(0, 8))
 
+        # Three clusters, thin dividers between them so the row reads as
+        # groups instead of one undifferentiated run of buttons: what the
+        # selected row can do -> queue-wide maintenance -> whole-library
+        # tools (already right-aligned, furthest from the queue they don't
+        # directly act on).
         actions = ctk.CTkFrame(panel, fg_color="transparent")
         actions.grid(row=6, column=0, sticky="ew", padx=14, pady=(0, 14))
+
+        def divider(parent):
+            ctk.CTkFrame(parent, fg_color=T.LINE, width=1, height=22
+                        ).pack(side="left", padx=8)
+
+        row_cluster = ctk.CTkFrame(actions, fg_color="transparent")
+        row_cluster.pack(side="left")
         self.row_buttons = []
         for text, command in (("Play file", self._play),
-                              ("Show in folder", self._reveal),
-                              ("Retry failures", self._retry),
-                              ("Export report", self._export)):
+                              ("Show in folder", self._reveal)):
             button = ctk.CTkButton(
-                actions, text=text, height=30, corner_radius=7, font=font(11),
+                row_cluster, text=text, height=30, corner_radius=7, font=font(11),
                 fg_color=T.BTN, hover_color=T.BTN_HOV, text_color=T.DIM,
-                width=110, command=command)
+                width=110, command=command, state="disabled")
             button.pack(side="left", padx=(0, 7))
             self.row_buttons.append(button)
-        self.row_buttons[0].configure(state="disabled")
-        self.row_buttons[1].configure(state="disabled")
 
+        divider(actions)
+
+        maintenance = ctk.CTkFrame(actions, fg_color="transparent")
+        maintenance.pack(side="left")
+        ctk.CTkButton(maintenance, text="Retry failures", height=30, corner_radius=7,
+                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                     text_color=T.DIM, width=110, command=self._retry
+                     ).pack(side="left", padx=(0, 7))
+        ctk.CTkButton(maintenance, text="Export report", height=30, corner_radius=7,
+                     font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                     text_color=T.DIM, width=110, command=self._export
+                     ).pack(side="left", padx=(0, 7))
         self.e621_btn = ctk.CTkButton(
-            actions, text="Fetch e621 tags", height=30, corner_radius=7,
+            maintenance, text="Fetch e621 tags", height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, width=130, command=self._fetch_e621)
-        self.e621_btn.pack(side="left", padx=(0, 7))
+        self.e621_btn.pack(side="left")
 
         self.dupes_btn = ctk.CTkButton(
             actions, text="Find duplicates", height=30, corner_radius=7,

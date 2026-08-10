@@ -112,27 +112,38 @@ class LibraryTab(ctk.CTkFrame):
         self._build_picks_bar()
 
     def _build_topbar(self):
-        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0, height=58)
+        """
+        Two rows instead of one long one: browsing controls up top (brand,
+        search, rating/sort), a separate action toolbar underneath (sync +
+        maintenance on the left, configuration on the right). The standalone
+        Folders button is gone - Settings > Library > "Change folders..."
+        and Ctrl+O both still reach it, so it doesn't need its own slot in
+        an already busy row.
+        """
+        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0)
         bar.grid(row=0, column=0, columnspan=3, sticky="ew")
-        bar.grid_propagate(False)
-        bar.grid_columnconfigure(1, weight=1)
 
-        left = ctk.CTkFrame(bar, fg_color="transparent")
-        left.grid(row=0, column=0, sticky="w", padx=18, pady=10)
-        self.brand_paw = tk.Canvas(left, width=30, height=30, bg=T.SURFACE,
+        # ── row 1: browse ────────────────────────────────────────────────
+        row1 = ctk.CTkFrame(bar, fg_color="transparent")
+        row1.pack(fill="x")
+        row1.grid_columnconfigure(1, weight=1)
+
+        left = ctk.CTkFrame(row1, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w", padx=18, pady=(10, 6))
+        self.brand_paw = tk.Canvas(left, width=26, height=26, bg=T.SURFACE,
                                     highlightthickness=0, bd=0)
-        self.brand_paw.pack(side="left", padx=(0, 9))
-        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(19, "bold"),
+        self.brand_paw.pack(side="left", padx=(0, 8))
+        self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(16, "bold"),
                                         text_color=T.ACCENT2)
         self.brand_name.pack(side="left")
-        self.brand_kind = ctk.CTkLabel(left, text="Den", font=font(19), text_color=T.TEXT)
-        self.brand_kind.pack(side="left", padx=(5, 0))
+        self.brand_kind = ctk.CTkLabel(left, text="Den", font=font(16), text_color=T.TEXT)
+        self.brand_kind.pack(side="left", padx=(4, 0))
         self.brand_sub = ctk.CTkLabel(left, text="", font=font(10, mono=True),
                                        text_color=T.FAINT)
-        self.brand_sub.pack(side="left", padx=(12, 0), pady=(6, 0))
+        self.brand_sub.pack(side="left", padx=(10, 0), pady=(3, 0))
 
-        mid = ctk.CTkFrame(bar, fg_color="transparent")
-        mid.grid(row=0, column=1, sticky="ew", padx=8, pady=10)
+        mid = ctk.CTkFrame(row1, fg_color="transparent")
+        mid.grid(row=0, column=1, sticky="ew", padx=8, pady=(10, 6))
         mid.grid_columnconfigure(0, weight=1)
 
         self.search = ctk.CTkEntry(
@@ -156,11 +167,11 @@ class LibraryTab(ctk.CTkFrame):
                       text_color=T.DIM, command=self._clear_search
                       ).grid(row=0, column=2, padx=(4, 0))
 
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=2, sticky="e", padx=16, pady=10)
+        right1 = ctk.CTkFrame(row1, fg_color="transparent")
+        right1.grid(row=0, column=2, sticky="e", padx=16, pady=(10, 6))
 
         self.rating_seg = ctk.CTkSegmentedButton(
-            right, values=["All", "S", "Q", "E"], command=lambda _v: self.run_search(),
+            right1, values=["All", "S", "Q", "E"], command=lambda _v: self.run_search(),
             font=font(10), height=30, corner_radius=7, fg_color=T.INPUT,
             selected_color=T.ACCENT_DEEP, selected_hover_color=T.ACCENT_DEEP,
             unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
@@ -169,21 +180,34 @@ class LibraryTab(ctk.CTkFrame):
         self.rating_seg.pack(side="left", padx=(0, 8))
 
         self.sort_menu = ctk.CTkOptionMenu(
-            right, values=list(SORTS), width=110, height=30, font=font(11),
+            right1, values=list(SORTS), width=110, height=30, font=font(11),
             corner_radius=7, fg_color=T.INPUT, button_color=T.LINE,
             button_hover_color=T.BTN_HOV, dropdown_fg_color=T.ELEVATED,
             text_color=T.TEXT, command=lambda _v: self.run_search())
         self.sort_menu.set(self.cfg.sort if self.cfg.sort in SORTS else "Newest")
-        self.sort_menu.pack(side="left", padx=(0, 8))
+        self.sort_menu.pack(side="left", padx=(0, 6))
 
-        self.help_btn = ctk.CTkButton(
-            right, text="?", width=30, height=30, corner_radius=7,
-            font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.FAINT, command=lambda: HelpWindow(self.root))
-        self.help_btn.pack(side="left", padx=(0, 8))
+        ctk.CTkButton(right1, text="▲ Top", width=54, height=30, corner_radius=7,
+                      font=font(10), fg_color=T.BTN, hover_color=T.BTN_HOV,
+                      text_color=T.ACCENT2, command=lambda: self.add_token("sort:score")
+                      ).pack(side="left")
+
+        # ── row 2: act ───────────────────────────────────────────────────
+        row2 = ctk.CTkFrame(bar, fg_color="transparent")
+        row2.pack(fill="x")
+        row2.grid_columnconfigure(1, weight=1)
+
+        actions = ctk.CTkFrame(row2, fg_color="transparent")
+        actions.grid(row=0, column=0, sticky="w", padx=18, pady=(0, 10))
+
+        self.sync_btn = ctk.CTkButton(
+            actions, text="Sync library", width=110, height=30, corner_radius=7,
+            font=font(11, "bold"), fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
+            text_color=T.ACCENT2, command=self._sync_clicked)
+        self.sync_btn.pack(side="left", padx=(0, 8))
 
         self.fix_btn = ctk.CTkButton(
-            right, text="Fix missing", width=118, height=30, corner_radius=7,
+            actions, text="Fix missing", width=118, height=30, corner_radius=7,
             font=font(11, "bold"), fg_color=T.ACCENT_DEEP, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self._fill_missing)
         self.fix_btn.pack(side="left", padx=(0, 8))
@@ -192,31 +216,28 @@ class LibraryTab(ctk.CTkFrame):
         self.fix_btn.bind("<Button-3>", self._verify_menu)
 
         self.fetch_btn = ctk.CTkButton(
-            right, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
+            actions, text="Fetch e621 tags", width=124, height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self._fetch_tags)
-        self.fetch_btn.pack(side="left", padx=(0, 8))
+        self.fetch_btn.pack(side="left")
         # Right-click for a bigger, on-demand soft-refresh pass - every
         # regular fetch already folds in a small one automatically.
         self.fetch_btn.bind("<Button-3>", self._fetch_menu)
 
-        self.sync_btn = ctk.CTkButton(
-            right, text="Sync library", width=110, height=30, corner_radius=7,
-            font=font(11, "bold"), fg_color=T.ACCENT2_DEEP, hover_color=T.BTN_HOV,
-            text_color=T.ACCENT2, command=self._sync_clicked)
-        self.sync_btn.pack(side="left", padx=(0, 8))
-
-        self.folders_btn = ctk.CTkButton(
-            right, text="Folders", width=74, height=30, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self._open_folders)
-        self.folders_btn.pack(side="left", padx=(0, 8))
+        config = ctk.CTkFrame(row2, fg_color="transparent")
+        config.grid(row=0, column=2, sticky="e", padx=16, pady=(0, 10))
 
         self.settings_btn = ctk.CTkButton(
-            right, text="Settings", width=80, height=30, corner_radius=7,
+            config, text="Settings", width=80, height=30, corner_radius=7,
             font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.DIM, command=self._open_settings)
-        self.settings_btn.pack(side="left")
+        self.settings_btn.pack(side="left", padx=(0, 8))
+
+        self.help_btn = ctk.CTkButton(
+            config, text="?", width=30, height=30, corner_radius=7,
+            font=font(12, "bold"), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.FAINT, command=lambda: HelpWindow(self.root))
+        self.help_btn.pack(side="left")
 
     SIDEBAR_W = 280
 
@@ -285,6 +306,9 @@ class LibraryTab(ctk.CTkFrame):
         info.grid(row=1, column=0, sticky="ew", pady=(2, 4))
         info.grid_columnconfigure(0, weight=1)
 
+        # Filter chips only, on the left - actions (Random, Pick page, tile
+        # size) live on the right with the pager instead, since they're
+        # things you DO, not ways of narrowing what's shown.
         left = ctk.CTkFrame(info, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w")
         self.count_label = ctk.CTkLabel(left, text="", font=font(10, mono=True),
@@ -297,8 +321,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("4k", "4K ✓", "is:4k"),
                 ("no4k", "Non-4K", "is:no4k"),
                 ("portrait", "📱 Portrait", "is:portrait"),
-                ("widescreen", "🖥 Widescreen", "is:widescreen"),
-                ("top", "Top rated", "sort:score")):
+                ("widescreen", "🖥 Widescreen", "is:widescreen")):
             chip = ctk.CTkButton(left, text=text, height=22, width=92,
                                  corner_radius=11, font=font(9),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
@@ -306,26 +329,27 @@ class LibraryTab(ctk.CTkFrame):
                                  command=lambda t=token: self.add_token(t))
             chip.pack(side="left", padx=(0, 6))
             self.quick_chips[key] = (chip, text)
-        ctk.CTkButton(left, text="🎲 Random", height=22, width=84,
+
+        pager = ctk.CTkFrame(info, fg_color="transparent")
+        pager.grid(row=0, column=1, sticky="e")
+
+        ctk.CTkButton(pager, text="🎲 Random", height=22, width=84,
                       corner_radius=11, font=font(9), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.ACCENT2,
                       command=self._random).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(left, text="★ Pick page", height=22, width=88,
+        ctk.CTkButton(pager, text="★ Pick page", height=22, width=88,
                       corner_radius=11, font=font(9), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.ACCENT,
                       command=self._pick_page).pack(side="left", padx=(0, 10))
         self.size_seg = ctk.CTkSegmentedButton(
-            left, values=["S", "M", "L", "XL"], width=140, height=22,
+            pager, values=["S", "M", "L", "XL"], width=140, height=22,
             font=font(9), corner_radius=11, fg_color=T.INPUT,
             selected_color=T.ACCENT_DEEP, selected_hover_color=T.ACCENT_DEEP,
             unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
             text_color=T.DIM, border_width=1, command=self._set_card_size)
         self.size_seg.set({"Small": "S", "Medium": "M", "Large": "L",
                            "Huge": "XL"}.get(self.cfg.card_size, "M"))
-        self.size_seg.pack(side="left")
-
-        pager = ctk.CTkFrame(info, fg_color="transparent")
-        pager.grid(row=0, column=1, sticky="e")
+        self.size_seg.pack(side="left", padx=(0, 14))
 
         def pbtn(text, cmd):
             return ctk.CTkButton(pager, text=text, width=34, height=24,
@@ -749,7 +773,6 @@ class LibraryTab(ctk.CTkFrame):
             "no4k": sum(1 for r in self.records if not r.premium),
             "portrait": sum(1 for r in self.records if r.orientation == "portrait"),
             "widescreen": sum(1 for r in self.records if r.orientation == "widescreen"),
-            "top": None,
         }
         for key, (chip, label) in self.quick_chips.items():
             count = counts.get(key)

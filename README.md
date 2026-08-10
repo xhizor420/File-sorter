@@ -102,6 +102,22 @@ done, and the gap check tells you what's converted but not yet upscaled.
 **Promote upscales** moves anything that now meets the bar into the edit
 pool.
 
+## Interface
+
+A slim shared header (suite branding + the one Discreet-mode toggle) sits
+above the Convert/Library tab strip. Each tab's own top area is two rows:
+a browsing row (brand, search, rating/sort) and, underneath it, an action
+toolbar - maintenance actions (Sync, Fix missing, Fetch tags / Scan,
+Start) on the left, configuration (Settings, Help) on the right. The
+standalone Folders button is gone; **Settings → Library → Change
+folders…** and `Ctrl+O` both still reach it, so it didn't need a
+permanent slot in an already busy row. In the Library gallery, the chip
+row is filters only (Untagged, No post ID, 4K, Non-4K, Portrait,
+Widescreen); Random, Pick page and tile size moved next to the pager
+since they're actions, not ways of narrowing the results, and "Top
+rated" is now a small button beside the sort dropdown since it's really
+a sort shortcut.
+
 ## Setup
 
 Python 3.9+.

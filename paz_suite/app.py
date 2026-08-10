@@ -12,7 +12,7 @@ import tkinter as tk
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, paw_photo
+from .theme import T, font, draw_paw, paw_photo
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -46,6 +46,8 @@ class PazApp:
         root.minsize(1180, 700)
         root.configure(fg_color=T.BG)
 
+        self._build_header()
+
         self.tabview = ctk.CTkTabview(
             root, fg_color=T.BG, corner_radius=0,
             segmented_button_fg_color=T.SURFACE,
@@ -69,7 +71,39 @@ class PazApp:
         root.bind("<Configure>", self._on_root_configure, add="+")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── chrome (title/icon), shared discreet + boss-key toggles ────────────
+    # ── header (shared identity + discreet toggle, above the tab strip) ────
+    #
+    # Each tab still draws its own small colour-coded brand block (pink for
+    # Convert, violet for Library) so which mode you're in is obvious at a
+    # glance without reading the tab label - this bar is just the one piece
+    # of chrome neither tab should have to own twice: the suite's own
+    # identity, and Discreet mode, which previously had no visible control
+    # anywhere (Ctrl+D or digging into Settings only).
+
+    def _build_header(self) -> None:
+        bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=40)
+        bar.pack(fill="x", side="top")
+        bar.grid_propagate(False)
+        bar.grid_columnconfigure(1, weight=1)
+
+        left = ctk.CTkFrame(bar, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="w", padx=16, pady=6)
+        self._header_paw = tk.Canvas(left, width=20, height=20, bg=T.SURFACE,
+                                     highlightthickness=0, bd=0)
+        self._header_paw.pack(side="left", padx=(0, 8))
+        self._header_title = ctk.CTkLabel(left, text=APP_NAME, font=font(12, "bold"),
+                                          text_color=T.DIM)
+        self._header_title.pack(side="left")
+
+        right = ctk.CTkFrame(bar, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="e", padx=16, pady=6)
+        self.discreet_btn = ctk.CTkButton(
+            right, text="Discreet", width=84, height=27, corner_radius=7,
+            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.DIM, command=self._toggle_discreet)
+        self.discreet_btn.pack(side="left")
+
+    # ── chrome (title/icon/header), shared discreet + boss-key toggles ─────
 
     def _apply_chrome(self) -> None:
         self.root.title(self.cfg.neutral_title if self.cfg.discreet
@@ -86,6 +120,15 @@ class PazApp:
                 self.root.iconphoto(False, self._icon_paw)
         except tk.TclError:
             pass
+
+        self._header_paw.delete("all")
+        if self.cfg.discreet:
+            self._header_title.configure(text=self.cfg.neutral_title)
+            self.discreet_btn.configure(fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
+        else:
+            draw_paw(self._header_paw, 10, 10, 18, T.DIM)
+            self._header_title.configure(text=APP_NAME)
+            self.discreet_btn.configure(fg_color=T.BTN, text_color=T.DIM)
 
     def _toggle_discreet(self) -> None:
         self.cfg.discreet = not self.cfg.discreet
