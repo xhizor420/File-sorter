@@ -17,7 +17,7 @@ from tkinter import messagebox, ttk
 
 import customtkinter as ctk
 
-from .theme import T, font, draw_paw, CONVERT_LABELS
+from .theme import T, font, CONVERT_LABELS
 from .format import fmt_time, fmt_clock, fmt_size
 from .files import is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer
 from .media import check_dependencies, available_encoders, probe
@@ -91,14 +91,10 @@ class ConvertTab(ctk.CTkFrame):
     def log(self, message: str, level: str = "info"):
         self.ui(self.logview.write, message, level)
 
-    # ── flavor ──────────────────────────────────────────────────────────────
-
-    def _flavored(self) -> bool:
-        return self.cfg.flavor and not self.cfg.discreet
+    # ── copy ─────────────────────────────────────────────────────────────
 
     def F(self, key: str, **fmt) -> str:
-        neutral, spicy = CONVERT_LABELS[key]
-        text = spicy if self._flavored() else neutral
+        text = CONVERT_LABELS[key]
         return text.format(**fmt) if fmt else text
 
     # ── layout ──────────────────────────────────────────────────────────────
@@ -117,9 +113,6 @@ class ConvertTab(ctk.CTkFrame):
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=20, pady=10)
 
-        self.brand_paw = tk.Canvas(left, width=30, height=30, bg=T.SURFACE,
-                                    highlightthickness=0, bd=0)
-        self.brand_paw.pack(side="left", padx=(0, 9))
         self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(19, "bold"),
                                         text_color=T.ACCENT)
         self.brand_name.pack(side="left")
@@ -329,13 +322,11 @@ class ConvertTab(ctk.CTkFrame):
                                             font=font(10, "bold"),
                                             text_color=T.FAINT)
         self.inspector_head.grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(head, text="click timeline · ←→ step · Space skim · G grid",
+        ctk.CTkLabel(head, text="click timeline · ←→ step · Space play/pause · G grid",
                      font=font(10), text_color=T.FAINT
                      ).grid(row=0, column=1, sticky="e")
 
-        self.preview = ScrubPreview(panel, self.cache,
-                                     is_discreet=lambda: self.cfg.discreet,
-                                     is_flavored=self._flavored)
+        self.preview = ScrubPreview(panel, self.cache, self.cfg)
         self.preview.configure(border_color=T.ACCENT_DEEP)
         self.preview.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 10))
 
@@ -369,7 +360,7 @@ class ConvertTab(ctk.CTkFrame):
     def key_space(self, event):
         if self.is_typing(event):
             return
-        self.preview.toggle_skim()
+        self.preview.toggle_play()
         return "break"
 
     def key_grid(self, event):
@@ -389,9 +380,8 @@ class ConvertTab(ctk.CTkFrame):
 
     def _check_environment(self):
         self.logview.write("PAZ Suite — Convert", "head")
-        self.logview.write("Keys: Space skim · ←→ step · G grid · H hover peek "
-                           "· Ctrl+D discreet · F12 hide · Ctrl+Enter start · "
-                           "Esc stop", "info")
+        self.logview.write("Keys: Space play/pause · ←→ step · G grid · "
+                           "H hover peek · Ctrl+Enter start · Esc stop", "info")
         missing = check_dependencies()
         if missing:
             self.logview.write(f"Missing on PATH: {', '.join(missing)}. "
@@ -418,18 +408,7 @@ class ConvertTab(ctk.CTkFrame):
         self.cfg.save()
 
     def _apply_brand(self):
-        self.brand_paw.delete("all")
-        if self.cfg.discreet:
-            self.brand_name.configure(text=self.cfg.neutral_title, text_color=T.DIM)
-            self.brand_kind.configure(text="")
-            self.brand_sub.configure(text="")
-            self.brand_paw.configure(width=1)
-        else:
-            self.brand_paw.configure(width=30)
-            draw_paw(self.brand_paw, 15, 15, 26, T.ACCENT if self._flavored() else T.DIM)
-            self.brand_name.configure(text="PAZ", text_color=T.ACCENT)
-            self.brand_kind.configure(text="Studio")
-            self.brand_sub.configure(text=f"{self.F('tagline')} · Convert")
+        self.brand_sub.configure(text=f"{self.F('tagline')} · Convert")
 
     def _relabel(self):
         self.scan_btn.configure(text=self.F("scan"))
@@ -444,26 +423,6 @@ class ConvertTab(ctk.CTkFrame):
         self.e621_btn.configure(text=self.F("fetch_tags"))
         self.inspector_head.configure(text=self.F("inspector"))
         self.logview.header_label.configure(text=self.F("log"))
-
-    def on_discreet_changed(self):
-        self._apply_brand()
-        self._relabel()
-        self._peek_hide()
-        self.preview.peek.hide()
-        selected = self.table.selected
-        if selected:
-            self._on_select(selected)
-        else:
-            self.preview.clear(self.F("pick"))
-        if not self.processing:
-            self._set_status(self.F("watching") if self.watch_flag.is_set()
-                             else self.F("idle"),
-                             T.ACCENT if self.watch_flag.is_set() else T.FAINT)
-        self.log("Discreet mode " + ("on" if self.cfg.discreet else "off"), "info")
-
-    def on_boss_key(self):
-        self._peek_hide()
-        self.preview.peek.hide()
 
     # ── hover peek ──────────────────────────────────────────────────────────
 
@@ -509,10 +468,12 @@ class ConvertTab(ctk.CTkFrame):
             return
         title = task.name
         record = self.emeta.get(task.pid) if task.pid else None
-        if record and record.get("artist") and not self.cfg.discreet:
+        if record and record.get("artist"):
             title = f"{record['artist'][0]} · #{task.pid}"
+        duration = task.info.duration if task.info else 0
+        fraction = (moment / duration) if duration else None
         self.peek.show_frame(data, title, fmt_clock(moment), x_root, y_root,
-                             blur=self.cfg.discreet)
+                             fraction=fraction)
 
     def _peek_hide(self):
         self._peek_iid = None
@@ -538,7 +499,7 @@ class ConvertTab(ctk.CTkFrame):
             self.log("Select a clip first, then press G for its contact sheet.", "info")
             return
         ContactSheet(self.root, self.cache, path, os.path.basename(path),
-                     on_jump=self.preview.seek, is_discreet=lambda: self.cfg.discreet)
+                     on_jump=self.preview.seek)
 
     # ── e621 lookup ─────────────────────────────────────────────────────────
 
@@ -1007,7 +968,7 @@ class ConvertTab(ctk.CTkFrame):
         self.counts = {"done": 0, "failed": 0, "sorted": 0, "skipped": 0,
                        "gaps_found": 0, "gaps_copied": 0}
         self.bytes_done = 0
-        self.preview.clear(self.F("pick"))
+        self.preview.clear(self.F("no_selection"))
         self.overall.reset()
 
         extensions = self.cfg.source_ext_set
@@ -1477,7 +1438,7 @@ class ConvertTab(ctk.CTkFrame):
                 self.preview.set_note("Will be " + " · ".join(notes), T.ACCENT)
                 return
         record = self.emeta.get(task.pid) if task.pid else None
-        if record and not record.get("missing") and not self.cfg.discreet:
+        if record and not record.get("missing"):
             bits = []
             if record.get("artist"):
                 bits.append(", ".join(record["artist"][:2]))
@@ -1520,7 +1481,6 @@ class ConvertTab(ctk.CTkFrame):
         menu.add_command(label="Copy source path", command=lambda: self._copy(task.source))
         if task.pid:
             menu.add_command(label=f"Open e621 post #{task.pid}",
-                             state="disabled" if self.cfg.discreet else "normal",
                              command=lambda: self._open_post(task))
             record = self.emeta.get(task.pid)
             if record and record.get("tags"):

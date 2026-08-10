@@ -1,5 +1,5 @@
-"""Library-tab dialog windows: saved pick sets, hidden-tag management, the
-help reference, the folder picker, and the library integrity verifier.
+"""Library-tab dialog windows: hidden-tag management, the help reference,
+the folder picker, and the library integrity verifier.
 """
 
 from __future__ import annotations
@@ -15,70 +15,6 @@ import customtkinter as ctk
 from .theme import T, font
 from .files import is_ignored_dir, open_in_explorer
 from .convert_engine import verify
-
-
-class PickSetsWindow(ctk.CTkToplevel):
-    """Saved shortlists, one per project."""
-
-    def __init__(self, parent, tab):
-        super().__init__(parent)
-        self.tab = tab
-        self.title("Pick sets")
-        self.geometry("520x520")
-        self.configure(fg_color=T.BG)
-        self.transient(parent)
-        self.after(120, self.lift)
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(self, text="Each set is a saved shortlist. Loading a "
-                                "set replaces the current picks.",
-                     font=font(11), text_color=T.FAINT, wraplength=470,
-                     justify="left", anchor="w"
-                     ).grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 8))
-        self.list = ctk.CTkScrollableFrame(
-            self, fg_color=T.SURFACE, corner_radius=12, border_width=1,
-            border_color=T.LINE, scrollbar_button_color=T.LINE,
-            scrollbar_button_hover_color=T.FAINT)
-        self.list.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
-        self.list.grid_columnconfigure(0, weight=1)
-        self.bind("<Escape>", lambda e: self.destroy())
-        self._fill()
-
-    def _fill(self):
-        for child in self.list.winfo_children():
-            child.destroy()
-        sets = self.tab.cfg.pick_sets
-        if not sets:
-            ctk.CTkLabel(self.list, text="No saved sets.", font=font(11),
-                         text_color=T.FAINT).grid(row=0, column=0, padx=12,
-                                                   pady=12, sticky="w")
-            return
-        for row, (name, paths) in enumerate(sorted(sets.items())):
-            alive = sum(1 for p in paths if os.path.exists(p))
-            twins = sum(1 for p in paths if self.tab.premium_twin(p))
-            ctk.CTkLabel(self.list,
-                         text=f"{name}\n{alive} clips · {twins} in 4K60",
-                         font=font(11), text_color=T.TEXT, anchor="w",
-                         justify="left").grid(row=row, column=0, sticky="ew",
-                                               padx=(12, 4), pady=5)
-            ctk.CTkButton(self.list, text="Load", width=62, height=26,
-                          corner_radius=6, font=font(10), fg_color=T.BTN,
-                          hover_color=T.BTN_HOV, text_color=T.ACCENT,
-                          command=lambda n=name: self._load(n)
-                          ).grid(row=row, column=1, padx=4, pady=5)
-            ctk.CTkButton(self.list, text="Delete", width=62, height=26,
-                          corner_radius=6, font=font(10), fg_color=T.BTN,
-                          hover_color=T.BTN_HOV, text_color=T.FAIL,
-                          command=lambda n=name: self._delete(n)
-                          ).grid(row=row, column=2, padx=(4, 10), pady=5)
-
-    def _load(self, name):
-        self.tab.apply_pick_set(name)
-        self.destroy()
-
-    def _delete(self, name):
-        self.tab.delete_pick_set(name)
-        self._fill()
 
 
 class HiddenTagsWindow(ctk.CTkToplevel):
@@ -171,30 +107,24 @@ class HelpWindow(ctk.CTkToplevel):
          "without ever re-fetching the whole library at once. Right-click "
          "for a bigger on-demand catch-up pass; tune the batch size in "
          "Settings > Library."),
-        ("Picks", "A shortlist for whatever you're doing next - editing, "
-         "reviewing, exporting. Press P on a clip (or right-click > Add to "
-         "Picks), collect as many as you want, then Copy paths or Export "
-         ".m3u straight into your editor or player."),
-        ("Building a shortlist", "Browse the library, press P on the clips "
-         "you want (★ Pick page adds a whole page), then Save set and name "
-         "it - one saved shortlist per project. Load it again any time from "
-         "the Picks bar."),
-        ("Pick sets", "Named shortlists. Save set / Load set sit in the "
-         "Picks bar, so you can switch between projects without re-picking."),
         ("▲ Score", "The e621 upvote score for that post, next to the fps on "
          "every card. Sort by it with the Top rated chip, or the Score sort."),
         ("4K ✓", "Shown when a 4K/60+ copy of that exact file exists in the "
          "premium folder (or the clip itself is 4K). Search it with is:4k."),
-        ("Portrait / Widescreen", "Aspect ratio isn't usually a tag, so it's "
-         "handled separately: is:portrait (phone-shaped, tall) and "
-         "is:widescreen (landscape) are computed straight from each clip's "
-         "resolution, with quick chips for both - a fast way to pull "
-         "clips that match your edit's output orientation."),
+        ("Ratio", "Aspect ratio isn't usually a tag, so it gets its own "
+         "dropdown next to Random: Portrait (phone-shaped, tall), "
+         "Widescreen (landscape) and Square are computed straight from each "
+         "clip's resolution - a fast way to pull clips that match your "
+         "edit's output orientation. The same filters work as search terms: "
+         "is:portrait, is:widescreen, is:square."),
+        ("Grid", "A contact sheet of twelve evenly-spaced frames from the "
+         "selected clip - the whole thing at a glance. Click any frame to "
+         "jump the player straight to that moment."),
         ("Search", "Terms AND together. -term excludes. Prefixes: artist: "
          "character: species: rating: folder: id: is:. Wildcards: dragon*. "
-         "is:untagged, is:noid, is:4k, is:portrait, is:widescreen are the "
-         "useful specials. Click any tag anywhere to add it; right-click "
-         "for exclude/hide."),
+         "is:untagged, is:noid, is:4k, is:portrait, is:widescreen, "
+         "is:square are the useful specials. Click any tag anywhere to add "
+         "it; right-click for exclude/hide."),
         ("Viewer size", "The player scales with the window. Theater mode "
          "(Ctrl+T, or the button above the viewer) gives it about half the "
          "window and collapses the tag rail for close inspection."),
@@ -208,9 +138,8 @@ class HelpWindow(ctk.CTkToplevel):
          "Up/Down arrows in the search box step through them, the ↺ "
          "button lists them, and ✕ clears the box."),
         ("Keys", "/ search · Enter or Space play/pause · ←→ seek 5s · "
-         "P pick · R random · PgUp/PgDn pages · 1-4 tile size · Ctrl+L "
-         "collapse tags · Ctrl+C copy name · Ctrl+F search · F5 sync · "
-         "Ctrl+O folders · Ctrl+T theater · Ctrl+D discreet · F12 hide"),
+         "R random · PgUp/PgDn pages · Ctrl+L collapse tags · Ctrl+C copy "
+         "name · Ctrl+F search · F5 sync · Ctrl+O folders · Ctrl+T theater"),
     )
 
     def __init__(self, parent):

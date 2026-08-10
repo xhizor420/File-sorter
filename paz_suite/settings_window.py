@@ -279,17 +279,20 @@ class SettingsWindow(ctk.CTkToplevel):
         self._number(tab, 7, "thumb_width", "Thumbnail width", 240, 960)
         self._hint(tab, 8, "Changing thumbnail width needs a full rebuild "
                           "(Ctrl+Shift+R) to take effect on existing clips.")
+        self._number(tab, 9, "card_width", "Gallery tile width", 120, 480)
+        self._hint(tab, 10, "How wide each card in the gallery grid is, in "
+                           "pixels. Takes effect immediately.")
 
-        self._section(tab, "Player", 9)
-        self._switch(tab, 10, "player_loop", "Loop clips by default")
-        self._switch(tab, 11, "theater", "Theater mode (viewer takes ~half the window)")
+        self._section(tab, "Player", 11)
+        self._switch(tab, 12, "player_loop", "Loop clips by default")
+        self._switch(tab, 13, "theater", "Theater mode (viewer takes ~half the window)")
 
-        self._section(tab, "Tagging", 12)
-        self._switch(tab, 13, "library_autofetch",
+        self._section(tab, "Tagging", 14)
+        self._switch(tab, 15, "library_autofetch",
                     "Fetch missing tags automatically after a sync")
-        self._number(tab, 14, "library_stale_refresh_budget",
+        self._number(tab, 16, "library_stale_refresh_budget",
                     "Soft-refresh budget per fetch", 0, 2000)
-        self._hint(tab, 15, "Every tag fetch also quietly re-checks up to this "
+        self._hint(tab, 17, "Every tag fetch also quietly re-checks up to this "
                            "many already-tagged posts that are \"due\" - fresh "
                            "posts get re-checked every few days for new votes/"
                            "tags, old ones every few months - so scores stay "
@@ -297,13 +300,13 @@ class SettingsWindow(ctk.CTkToplevel):
                            "at once. 0 turns this off (right-click Fetch e621 "
                            "tags still lets you force a bigger catch-up pass).")
 
-        self._section(tab, "Performance", 16)
-        self._number(tab, 17, "probe_cache_limit", "ffprobe results cached", 2000, 500000)
-        self._hint(tab, 18, "In-memory only, a few hundred bytes each - raise "
+        self._section(tab, "Performance", 18)
+        self._number(tab, 19, "probe_cache_limit", "ffprobe results cached", 2000, 500000)
+        self._hint(tab, 20, "In-memory only, a few hundred bytes each - raise "
                            "this as your library grows so browsing doesn't "
                            "keep re-reading files ffprobe already looked at.")
-        self._number(tab, 19, "frame_cache_limit", "Scrub/hover frames cached", 500, 200000)
-        self._hint(tab, 20, "On-disk JPEGs in your temp folder, a few KB each "
+        self._number(tab, 21, "frame_cache_limit", "Scrub/hover frames cached", 500, 200000)
+        self._hint(tab, 22, "On-disk JPEGs in your temp folder, a few KB each "
                            "- this is the hover-preview/scrub cache, separate "
                            "from the permanent one-per-clip gallery thumbnails.")
 
@@ -330,23 +333,14 @@ class SettingsWindow(ctk.CTkToplevel):
         self._hint(tab, 6, "0.6s comfortably respects e621's rate limit. Lower "
                           "it only if you know your account allows more.")
 
-        self._section(tab, "Discretion", 7)
-        self._switch(tab, 8, "discreet", "Start in discreet mode")
-        self._hint(tab, 9, "Blurs all previews and uses the neutral window "
-                          "title below. Toggle any time with Ctrl+D.\nF12 "
-                          "instantly hides the window; restore it from the "
-                          "taskbar.")
-        self._entry(tab, 10, "neutral_title", "Window title")
+        self._section(tab, "Watch mode", 7)
+        self._switch(tab, 8, "watch_resume", "Re-arm watch mode on launch")
+        self._hint(tab, 9, "Off = watch always starts disarmed, and only "
+                          "runs after you flip it on for the session.")
 
-        self._section(tab, "Watch mode", 11)
-        self._switch(tab, 12, "watch_resume", "Re-arm watch mode on launch")
-        self._hint(tab, 13, "Off = watch always starts disarmed, and only "
-                           "runs after you flip it on for the session.")
-
-        self._section(tab, "Interface", 14)
-        self._switch(tab, 15, "flavor", "Den-speak labels and paw branding")
-        self._switch(tab, 16, "hover_peek", "Hover peek on the Convert queue")
-        self._number(tab, 17, "filmstrip_frames", "Filmstrip frames", 4, 16)
+        self._section(tab, "Interface", 10)
+        self._switch(tab, 11, "hover_peek", "Hover peek on the Convert queue")
+        self._number(tab, 12, "filmstrip_frames", "Filmstrip frames", 4, 16)
 
     # ── save ──────────────────────────────────────────────────────────────
 

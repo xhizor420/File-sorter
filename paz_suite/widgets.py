@@ -10,7 +10,7 @@ import tkinter as tk
 from datetime import datetime
 
 import customtkinter as ctk
-from PIL import Image, ImageFilter, ImageTk
+from PIL import Image, ImageTk
 
 from .theme import T, font
 from .format import fmt_size
@@ -80,11 +80,15 @@ class PeekWindow:
     A floating, borderless preview bubble that follows the mouse.
 
     Used for hovering a queue row, a gallery card, or the inspector
-    timeline. It never takes focus, never appears in the taskbar, and
-    honours discreet blur.
+    timeline. It never takes focus and never appears in the taskbar. A
+    thin progress bar sits under the frame, filled to match how far into
+    the clip that frame is - the same "scrub the thumbnail" cue YouTube
+    shows on hover, so the bubble tells you where you are at a glance
+    instead of just a timecode you have to read.
     """
 
-    W, H, CAP = 352, 198, 22
+    W, H, CAP = 380, 214, 24
+    BAR_H = 3
 
     def __init__(self, master):
         self.master = master
@@ -103,7 +107,7 @@ class PeekWindow:
         except tk.TclError:
             pass
         self.win.withdraw()
-        frame = tk.Frame(self.win, bg=T.ACCENT_DEEP, bd=0)
+        frame = tk.Frame(self.win, bg=T.LINE, bd=0)
         frame.pack(fill="both", expand=True)
         self.canvas = tk.Canvas(frame, width=self.W, height=self.H + self.CAP,
                                  bg=T.INPUT, highlightthickness=0, bd=0)
@@ -123,28 +127,34 @@ class PeekWindow:
             y = screen_h - h - 8
         self.win.geometry(f"{w}x{h}+{max(int(x), 0)}+{max(int(y), 0)}")
 
+    def _progress_bar(self, fraction: float | None) -> None:
+        y0 = self.H - self.BAR_H
+        self.canvas.create_rectangle(0, y0, self.W, self.H, fill=T.LINE_SOFT, outline="")
+        if fraction is not None:
+            fill_w = max(0.0, min(fraction, 1.0)) * self.W
+            if fill_w > 0:
+                self.canvas.create_rectangle(0, y0, fill_w, self.H,
+                                             fill=T.ACCENT, outline="")
+
     def _caption(self, title: str, sub: str) -> None:
         y = self.H + self.CAP // 2
         self.canvas.create_rectangle(0, self.H, self.W, self.H + self.CAP,
                                       fill=T.ELEVATED, outline="")
         if title:
-            self.canvas.create_text(8, y, text=title, fill=T.DIM,
+            self.canvas.create_text(10, y, text=title, fill=T.DIM,
                                      font=(T.UI, 9), anchor="w")
         if sub:
-            self.canvas.create_text(self.W - 8, y, text=sub, fill=T.ACCENT,
+            self.canvas.create_text(self.W - 10, y, text=sub, fill=T.ACCENT,
                                      font=(T.MONO, 9), anchor="e")
 
     def show_frame(self, data: bytes | None, title: str, sub: str,
-                   x_root: int, y_root: int, blur: bool = False) -> None:
+                   x_root: int, y_root: int, fraction: float | None = None) -> None:
         self._ensure()
         self.canvas.delete("all")
         if data:
             try:
                 image = Image.open(io.BytesIO(data))
                 image.thumbnail((self.W, self.H), Image.LANCZOS)
-                if blur:
-                    image = image.filter(
-                        ImageFilter.GaussianBlur(max(image.width // 22, 8)))
                 self._img = ImageTk.PhotoImage(image)
                 self.canvas.create_image(self.W // 2, self.H // 2,
                                           image=self._img, anchor="center")
@@ -153,6 +163,7 @@ class PeekWindow:
         if not data:
             self.canvas.create_text(self.W // 2, self.H // 2, text="no frame",
                                      fill=T.FAINT, font=(T.UI, 10))
+        self._progress_bar(fraction)
         self._caption(title, sub)
         self._place(x_root, y_root)
         self.win.deiconify()

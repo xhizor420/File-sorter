@@ -10,9 +10,8 @@ from __future__ import annotations
 import tkinter as tk
 
 import customtkinter as ctk
-from PIL import Image, ImageTk
 
-from .theme import T, font, draw_paw, paw_photo
+from .theme import T, font, mark_photo
 from .config import AppConfig
 from .e621 import E621Meta, APP_NAME, APP_VERSION
 from .media import ThumbCache, set_probe_cache_limit
@@ -34,8 +33,8 @@ class PazApp:
         self.cache = ThumbCache(limit=self.cfg.frame_cache_limit)  # shared frame/thumbnail cache
         self.toaster = Toaster(root)
         self.peek = PeekWindow(root)
-        self._icon_paw = None
-        self._icon_neutral = None
+        self._icon = None
+        self._header_icon = None
 
         root.geometry("1760x1020")
         # Every panel below (gallery columns, the inspector/player, the
@@ -71,80 +70,36 @@ class PazApp:
         root.bind("<Configure>", self._on_root_configure, add="+")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── header (shared identity + discreet toggle, above the tab strip) ────
+    # ── header (shared identity, above the tab strip) ──────────────────────
     #
     # Each tab still draws its own small colour-coded brand block (pink for
     # Convert, violet for Library) so which mode you're in is obvious at a
     # glance without reading the tab label - this bar is just the one piece
-    # of chrome neither tab should have to own twice: the suite's own
-    # identity, and Discreet mode, which previously had no visible control
-    # anywhere (Ctrl+D or digging into Settings only).
+    # of chrome neither tab should have to own twice: the suite's own name.
 
     def _build_header(self) -> None:
         bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=40)
         bar.pack(fill="x", side="top")
         bar.grid_propagate(False)
-        bar.grid_columnconfigure(1, weight=1)
 
         left = ctk.CTkFrame(bar, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=16, pady=6)
-        self._header_paw = tk.Canvas(left, width=20, height=20, bg=T.SURFACE,
-                                     highlightthickness=0, bd=0)
-        self._header_paw.pack(side="left", padx=(0, 8))
-        self._header_title = ctk.CTkLabel(left, text=APP_NAME, font=font(12, "bold"),
-                                          text_color=T.DIM)
-        self._header_title.pack(side="left")
+        self._header_icon = mark_photo(18, T.ACCENT)
+        tk.Label(left, image=self._header_icon, bg=T.SURFACE, bd=0
+                 ).pack(side="left", padx=(0, 8))
+        ctk.CTkLabel(left, text=APP_NAME, font=font(12, "bold"),
+                     text_color=T.DIM).pack(side="left")
 
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e", padx=16, pady=6)
-        self.discreet_btn = ctk.CTkButton(
-            right, text="Discreet", width=84, height=27, corner_radius=7,
-            font=font(11), fg_color=T.BTN, hover_color=T.BTN_HOV,
-            text_color=T.DIM, command=self._toggle_discreet)
-        self.discreet_btn.pack(side="left")
-
-    # ── chrome (title/icon/header), shared discreet + boss-key toggles ─────
+    # ── chrome (window title / taskbar icon) ────────────────────────────────
 
     def _apply_chrome(self) -> None:
-        self.root.title(self.cfg.neutral_title if self.cfg.discreet
-                        else f"{APP_NAME}  {APP_VERSION}")
+        self.root.title(f"{APP_NAME}  {APP_VERSION}")
         try:
-            if self.cfg.discreet:
-                if self._icon_neutral is None:
-                    blank = Image.new("RGBA", (32, 32), (26, 22, 36, 255))
-                    self._icon_neutral = ImageTk.PhotoImage(blank)
-                self.root.iconphoto(False, self._icon_neutral)
-            else:
-                if self._icon_paw is None:
-                    self._icon_paw = paw_photo(32, T.ACCENT)
-                self.root.iconphoto(False, self._icon_paw)
+            if self._icon is None:
+                self._icon = mark_photo(32, T.ACCENT)
+            self.root.iconphoto(False, self._icon)
         except tk.TclError:
             pass
-
-        self._header_paw.delete("all")
-        if self.cfg.discreet:
-            self._header_title.configure(text=self.cfg.neutral_title)
-            self.discreet_btn.configure(fg_color=T.ACCENT_DEEP, text_color=T.ACCENT)
-        else:
-            draw_paw(self._header_paw, 10, 10, 18, T.DIM)
-            self._header_title.configure(text=APP_NAME)
-            self.discreet_btn.configure(fg_color=T.BTN, text_color=T.DIM)
-
-    def _toggle_discreet(self) -> None:
-        self.cfg.discreet = not self.cfg.discreet
-        self.cfg.save()
-        self._apply_chrome()
-        self.peek.hide()
-        self.convert.on_discreet_changed()
-        self.library.on_discreet_changed()
-
-    def _boss(self) -> None:
-        self.peek.hide()
-        self.toaster.hide()
-        self.root.title(self.cfg.neutral_title)
-        self.root.iconify()
-        self.convert.on_boss_key()
-        self.library.on_boss_key()
 
     def _on_tab_changed(self) -> None:
         self.cfg.last_tab = self.tabview.get()
@@ -181,8 +136,6 @@ class PazApp:
 
     def _bind_keys(self) -> None:
         root = self.root
-        root.bind("<Control-d>", lambda e: self._toggle_discreet())
-        root.bind("<F12>", lambda e: self._boss())
 
         root.bind("<Escape>", lambda e: (
             self.convert.key_stop() if self._active() == "Convert"
@@ -196,13 +149,15 @@ class PazApp:
         root.bind("<Control-f>", lambda e: (
             self.convert.key_find_search() if self._active() == "Convert"
             else self.library.key_find_search(e)))
+        for key in ("g", "G"):
+            root.bind(key, lambda e: (
+                self.convert.key_grid(e) if self._active() == "Convert"
+                else self.library.key_grid(e)))
         root.bind("<Left>", self._left)
         root.bind("<Right>", self._right)
 
         # Convert-only
         root.bind("<Control-Return>", lambda e: self._only("Convert", self.convert.key_start))
-        for key in ("g", "G"):
-            root.bind(key, lambda e: self._only_evt("Convert", self.convert.key_grid, e))
         for key in ("h", "H"):
             root.bind(key, lambda e: self._only_evt("Convert", self.convert.key_peek_toggle, e))
         root.bind("<Shift-Left>", lambda e: self._only(
@@ -211,12 +166,8 @@ class PazApp:
             "Convert", lambda: self.convert.key_scrub(e, 10)))
 
         # Library-only
-        for key in ("p", "P"):
-            root.bind(key, lambda e: self._only_evt("Library", self.library.key_pick, e))
         for key in ("r", "R"):
             root.bind(key, lambda e: self._only_evt("Library", self.library.key_random, e))
-        for key in ("1", "2", "3", "4"):
-            root.bind(key, lambda e: self._only_evt("Library", self.library.key_size, e))
         root.bind("<Return>", lambda e: self._only_evt("Library", self.library.key_play, e))
         root.bind("<Control-o>", lambda e: self._only("Library", self.library.key_open_folders))
         root.bind("<Control-l>", lambda e: self._only("Library", self.library.key_toggle_sidebar))

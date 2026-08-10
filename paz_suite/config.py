@@ -90,7 +90,7 @@ class AppConfig:
     page_size: int = 48
     thumb_width: int = 480
     thumb_fit: str = "contain"
-    card_size: str = "Medium"
+    card_width: int = 224              # gallery tile width in px (Settings)
     sidebar_open: bool = True
     search_history: list = field(default_factory=list)
     theater: bool = False
@@ -100,7 +100,6 @@ class AppConfig:
     detail_open: dict = field(default_factory=dict)
     sort: str = "Newest"
     hidden_tags: list = field(default_factory=list)
-    pick_sets: dict = field(default_factory=dict)
 
     # ── Library: player ──────────────────────────────────────────────────
     player_height: int = 540
@@ -130,9 +129,6 @@ class AppConfig:
     frame_cache_limit: int = 30000
 
     # ── App-wide ──────────────────────────────────────────────────────────
-    discreet: bool = False
-    flavor: bool = True
-    neutral_title: str = "Media Suite"
     last_tab: str = "Convert"
 
     @classmethod

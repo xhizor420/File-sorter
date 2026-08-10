@@ -41,7 +41,6 @@ class InlinePlayer:
 
         self.engine = ClipPlayer(
             self.canvas, self.VIEW_W, self.VIEW_H,
-            get_discreet=lambda: tab.cfg.discreet,
             on_tick=self._on_tick, on_state=self._on_state, on_fail=self._on_fail)
         self.engine.loop = tab.cfg.player_loop
         self.engine.volume = max(0, min(int(tab.cfg.player_volume), 100))
@@ -83,10 +82,6 @@ class InlinePlayer:
         self.clock = ctk.CTkLabel(controls, text="", font=font(9, mono=True),
                                    text_color=T.DIM)
         self.clock.pack(side="left", padx=(4, 0))
-        ctk.CTkButton(controls, text="↗ VLC", width=56, height=26,
-                      corner_radius=6, font=font(10), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT2,
-                      command=self.engine.open_externally).pack(side="right")
 
         self.volume_slider = ctk.CTkSlider(
             controls, from_=0, to=100, number_of_steps=100, width=64,
@@ -150,7 +145,7 @@ class InlinePlayer:
             with open(os.path.join(THUMB_DIR, thumb_key(rec.path)), "rb") as fh:
                 image = Image.open(io.BytesIO(fh.read()))
             image = fit_frame(image, self.engine.view_w, self.engine.view_h,
-                              self.tab.cfg.thumb_fit, blur=self.tab.cfg.discreet)
+                              self.tab.cfg.thumb_fit)
             photo = ImageTk.PhotoImage(image)
             self.canvas.delete("all")
             self.canvas.create_image(self.engine.view_w // 2, self.engine.view_h // 2,

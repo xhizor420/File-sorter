@@ -21,8 +21,7 @@ telling you what's in your library and what still needs converting.
   Folders, Encoding, Sorting, Library, e621 & App) instead of overlapping
   fields living in different windows.
 - **One window** with a Convert/Library tab switcher instead of two
-  separate app windows; one Discreet-mode toggle and one F12 hide affect
-  both tabs at once.
+  separate app windows.
 - **One playback engine** (`player_engine.py`) shared by both tabs. The
   Library tab always had real play/pause/seek/volume with audio; the
   Convert tab's inspector used to only scrub and skim still frames. Now
@@ -33,9 +32,16 @@ telling you what's in your library and what still needs converting.
   (BPM grids for DaVinci Resolve) that didn't fit a general library/convert
   tool and pulled in an optional `numpy`/`paz_beats.py` dependency for
   something most people never touched. Removing it also means one less
-  startup check and a smaller surface area. Everything else — Picks,
-  pick sets, the search/tag sidebar — is written in general terms now
-  rather than PMV-specific language.
+  startup check and a smaller surface area.
+- **Discreet mode, Picks/pick sets, the S/M/L/XL tile-size selector and the
+  external "open in VLC" buttons are gone.** They were all tied to the
+  Beat-Markers-era PMV workflow (Picks in particular existed to collect
+  clips before exporting a marker playlist, which no longer exists). Both
+  tabs now have a real built-in player with audio, so there's no need to
+  hand off to an external one; gallery tile width is a plain typed number
+  in Settings instead of a preset picker; and every label across the app
+  is plain, single, general-purpose wording — there's no alternate phrasing
+  to toggle.
 - Roughly 1,500 lines of duplicated theme/e621-client/proxy-folder-
   filtering/probing/thumbnailing/hover-preview code that used to be
   copy-pasted between the two scripts now lives once, in `paz_suite/`.
@@ -71,18 +77,27 @@ telling you what's in your library and what still needs converting.
   13,000-post library in one pass. The batch size is tunable (`Settings →
   Library`, default 40/run); right-click **Fetch e621 tags** for a bigger
   on-demand catch-up pass.
-- **Portrait / Widescreen quick filters.** Aspect ratio isn't usually an
-  e621 tag, so it's handled separately: `is:portrait` and `is:widescreen`
-  are computed directly from each clip's resolution, with quick chips for
-  both, next to `is:4k` — a fast way to pull only phone-shaped or only
-  landscape footage when you're picking clips for an edit with a fixed
-  output orientation.
+- **Ratio quick filter.** Aspect ratio isn't usually an e621 tag, so it's
+  handled separately: `is:portrait`, `is:widescreen` and `is:square` are
+  computed directly from each clip's resolution. A single Ratio dropdown
+  next to Random applies any of them (or clears back to all ratios) in one
+  click — a fast way to pull only phone-shaped, only landscape, or only
+  square footage when you're picking clips for an edit with a fixed output
+  orientation.
+- **Grid on both tabs.** The contact sheet (twelve evenly-spaced frames of
+  a clip, click one to jump the player there) used to be Convert-only.
+  It's now a button in the Library detail panel too.
+- **Hover-preview progress bar.** Hovering a queue row, gallery card or
+  the Convert timeline shows a thin bar under the preview frame, filled to
+  match how far into the clip that frame is — the same cue YouTube shows
+  on hover, instead of just a timecode you had to read.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the
 upscale-gap finder, promote-to-pool, e621 tag lookup and caching, the
-canvas gallery with hover-scrub, picks/pick-sets, discreet mode, and the
-contact sheet / scrub-preview inspector.
+canvas gallery with hover-scrub, and the contact sheet / scrub-preview
+inspector — the contact sheet ("Grid") is now available on both tabs
+instead of Convert-only.
 
 ## What it's for
 
@@ -104,19 +119,25 @@ pool.
 
 ## Interface
 
-A slim shared header (suite branding + the one Discreet-mode toggle) sits
-above the Convert/Library tab strip. Each tab's own top area is two rows:
-a browsing row (brand, search, rating/sort) and, underneath it, an action
-toolbar - maintenance actions (Sync, Fix missing, Fetch tags / Scan,
-Start) on the left, configuration (Settings, Help) on the right. The
-standalone Folders button is gone; **Settings → Library → Change
-folders…** and `Ctrl+O` both still reach it, so it didn't need a
-permanent slot in an already busy row. In the Library gallery, the chip
-row is filters only (Untagged, No post ID, 4K, Non-4K, Portrait,
-Widescreen); Random, Pick page and tile size moved next to the pager
-since they're actions, not ways of narrowing the results, and "Top
-rated" is now a small button beside the sort dropdown since it's really
-a sort shortcut.
+A slim shared header (suite branding) sits above the Convert/Library tab
+strip. Each tab's own top area is two rows: a browsing row (brand, search,
+rating/sort) and, underneath it, an action toolbar - maintenance actions
+(Sync, Fix missing, Fetch tags / Scan, Start) on the left, configuration
+(Settings, Help) on the right. The standalone Folders button is gone;
+**Settings → Library → Change folders…** and `Ctrl+O` both still reach
+it, so it didn't need a permanent slot in an already busy row. In the
+Library gallery, the chip row is filters only (Untagged, No post ID, 4K,
+Non-4K); Random and a Ratio dropdown (Portrait / Widescreen / Square) sit
+next to the pager since they're actions, not ways of narrowing the
+results, and "Top rated" is a small button beside the sort dropdown
+since it's really a sort shortcut. Gallery tile width is a plain number
+in **Settings → Library → Display** instead of a size picker in the
+toolbar. Hovering a queue row, gallery card or the Convert inspector's
+timeline pops up a floating preview with a thin progress bar under the
+frame, YouTube-style, showing exactly how far into the clip that frame
+sits. The Convert inspector's player has a volume slider next to the
+mute button, same as the Library player, and both save volume/mute on
+close.
 
 ## Setup
 
@@ -153,7 +174,7 @@ tiled on a laptop screen.
 main.py                     entry point
 paz_suite/
   config.py                 unified AppConfig (+ legacy migration)
-  theme.py, format.py       palette/fonts/paw-art, human-readable formatting
+  theme.py, format.py       palette/fonts/status copy, human-readable formatting
   files.py                  proxy-folder filtering, post-ID parsing, open/reveal
   e621.py                   e621 tag lookup + cache (shared by both tabs)
   media.py                  ffprobe, thumbnailing, frame cache, perceptual hash
@@ -164,7 +185,7 @@ paz_suite/
   convert_tab.py            the Convert tab
   library_db.py             SQLite schema, search parser (no UI)
   library_player.py         the embedded clip player (thin UI over player_engine)
-  library_windows.py        pick sets, hidden tags, help, folders, integrity verifier
+  library_windows.py        hidden tags, help, folders, integrity verifier
   library_tab.py            the Library tab
   settings_window.py        the one settings dialog
   app.py                    window shell, tab switcher, shared keyboard dispatch

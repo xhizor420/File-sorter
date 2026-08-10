@@ -1,6 +1,6 @@
 """The Library tab: e621-style search over the converted library, a canvas
-gallery with hover-scrub, an embedded player, tag sidebar, picks/pick-sets,
-and the Fix-missing / Fetch-tags / Sync pipeline.
+gallery with hover-scrub, an embedded player, tag sidebar, and the
+Fix-missing / Fetch-tags / Sync pipeline.
 """
 
 from __future__ import annotations
@@ -18,20 +18,21 @@ from tkinter import messagebox
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from .theme import T, font, draw_paw, LIBRARY_LABELS
+from .theme import T, font, LIBRARY_LABELS
 from .format import fmt_len, fmt_clock, fmt_size, fmt_score
 from .files import (
-    is_ignored_dir, in_ignored_path, prune_dirs, post_id_from, open_file, open_in_explorer,
+    is_ignored_dir, in_ignored_path, post_id_from, open_file, open_in_explorer,
 )
 from .config import THUMB_DIR
 from .media import fit_frame, round_corners, thumb_key, make_thumb, probe
 from .e621 import E621_POST
 from .library_db import db_connect, Rec, parse_query, rec_matches, SORTS
 from .library_player import InlinePlayer
-from .library_windows import (
-    PickSetsWindow, HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow,
-)
+from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
+from .convert_widgets import ContactSheet
 from .widgets import PeekWindow
+
+RATIO_TOKENS = ("is:portrait", "is:widescreen", "is:square")
 
 
 class LibraryTab(ctk.CTkFrame):
@@ -54,9 +55,6 @@ class LibraryTab(ctk.CTkFrame):
         self.filtered: list[Rec] = []
         self.page = 0
         self.selected: Rec | None = None
-        self.picks: list[str] = []
-        self.current_set: str = ""
-        self._premium_idx = None
 
         self.busy = False
         self._page_token = 0
@@ -89,14 +87,10 @@ class LibraryTab(ctk.CTkFrame):
             self.set_status("No index yet", T.WARN)
         self.run_search()
 
-    # ── flavor ──────────────────────────────────────────────────────────────
-
-    def _flavored(self) -> bool:
-        return self.cfg.flavor and not self.cfg.discreet
+    # ── copy ─────────────────────────────────────────────────────────────
 
     def F(self, key: str, **fmt) -> str:
-        neutral, spicy = LIBRARY_LABELS[key]
-        text = spicy if self._flavored() else neutral
+        text = LIBRARY_LABELS[key]
         return text.format(**fmt) if fmt else text
 
     def ui(self, fn, *args, **kwargs):
@@ -109,7 +103,6 @@ class LibraryTab(ctk.CTkFrame):
         self._build_sidebar()
         self._build_grid_area()
         self._build_details()
-        self._build_picks_bar()
 
     def _build_topbar(self):
         """
@@ -130,13 +123,10 @@ class LibraryTab(ctk.CTkFrame):
 
         left = ctk.CTkFrame(row1, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w", padx=18, pady=(10, 6))
-        self.brand_paw = tk.Canvas(left, width=26, height=26, bg=T.SURFACE,
-                                    highlightthickness=0, bd=0)
-        self.brand_paw.pack(side="left", padx=(0, 8))
         self.brand_name = ctk.CTkLabel(left, text="PAZ", font=font(16, "bold"),
                                         text_color=T.ACCENT2)
         self.brand_name.pack(side="left")
-        self.brand_kind = ctk.CTkLabel(left, text="Den", font=font(16), text_color=T.TEXT)
+        self.brand_kind = ctk.CTkLabel(left, text="Library", font=font(16), text_color=T.TEXT)
         self.brand_kind.pack(side="left", padx=(4, 0))
         self.brand_sub = ctk.CTkLabel(left, text="", font=font(10, mono=True),
                                        text_color=T.FAINT)
@@ -306,9 +296,9 @@ class LibraryTab(ctk.CTkFrame):
         info.grid(row=1, column=0, sticky="ew", pady=(2, 4))
         info.grid_columnconfigure(0, weight=1)
 
-        # Filter chips only, on the left - actions (Random, Pick page, tile
-        # size) live on the right with the pager instead, since they're
-        # things you DO, not ways of narrowing what's shown.
+        # Filter chips only, on the left - actions (Random, ratio) live on
+        # the right with the pager instead, since they're things you DO,
+        # not ways of narrowing what's shown.
         left = ctk.CTkFrame(info, fg_color="transparent")
         left.grid(row=0, column=0, sticky="w")
         self.count_label = ctk.CTkLabel(left, text="", font=font(10, mono=True),
@@ -319,10 +309,7 @@ class LibraryTab(ctk.CTkFrame):
                 ("untagged", "Untagged", "is:untagged"),
                 ("noid", "No post ID", "is:noid"),
                 ("4k", "4K ✓", "is:4k"),
-                ("no4k", "Non-4K", "is:no4k"),
-                ("portrait", "📱 Portrait", "is:portrait"),
-                ("widescreen", "🖥 Widescreen", "is:widescreen"),
-                ("square", "◻ Square", "is:square")):
+                ("no4k", "Non-4K", "is:no4k")):
             chip = ctk.CTkButton(left, text=text, height=22, width=92,
                                  corner_radius=11, font=font(9),
                                  fg_color=T.BTN, hover_color=T.BTN_HOV,
@@ -338,19 +325,11 @@ class LibraryTab(ctk.CTkFrame):
                       corner_radius=11, font=font(9), fg_color=T.BTN,
                       hover_color=T.BTN_HOV, text_color=T.ACCENT2,
                       command=self._random).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(pager, text="★ Pick page", height=22, width=88,
-                      corner_radius=11, font=font(9), fg_color=T.BTN,
-                      hover_color=T.BTN_HOV, text_color=T.ACCENT,
-                      command=self._pick_page).pack(side="left", padx=(0, 10))
-        self.size_seg = ctk.CTkSegmentedButton(
-            pager, values=["S", "M", "L", "XL"], width=140, height=22,
-            font=font(9), corner_radius=11, fg_color=T.INPUT,
-            selected_color=T.ACCENT_DEEP, selected_hover_color=T.ACCENT_DEEP,
-            unselected_color=T.INPUT, unselected_hover_color=T.BTN_HOV,
-            text_color=T.DIM, border_width=1, command=self._set_card_size)
-        self.size_seg.set({"Small": "S", "Medium": "M", "Large": "L",
-                           "Huge": "XL"}.get(self.cfg.card_size, "M"))
-        self.size_seg.pack(side="left", padx=(0, 14))
+        self.ratio_btn = ctk.CTkButton(
+            pager, text="Ratio ▾", height=22, width=76, corner_radius=11,
+            font=font(9), fg_color=T.BTN, hover_color=T.BTN_HOV,
+            text_color=T.ACCENT2, command=self._ratio_menu)
+        self.ratio_btn.pack(side="left", padx=(0, 14))
 
         def pbtn(text, cmd):
             return ctk.CTkButton(pager, text=text, width=34, height=24,
@@ -434,11 +413,28 @@ class LibraryTab(ctk.CTkFrame):
     def _on_scroll(self, first, last):
         self.gallery_bar.set(first, last)
 
-    def _set_card_size(self, label: str):
-        self.cfg.card_size = {"S": "Small", "M": "Medium", "L": "Large",
-                              "XL": "Huge"}.get(label, "Medium")
-        self.cfg.save()
-        self.render_page()
+    def _ratio_menu(self):
+        menu = tk.Menu(self.root, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
+                       activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
+                       bd=0, font=(T.UI, 10))
+        menu.add_command(label="All ratios", command=lambda: self._set_ratio(None))
+        menu.add_command(label="📱 Portrait", command=lambda: self._set_ratio("is:portrait"))
+        menu.add_command(label="🖥 Widescreen", command=lambda: self._set_ratio("is:widescreen"))
+        menu.add_command(label="◻ Square", command=lambda: self._set_ratio("is:square"))
+        try:
+            x = self.ratio_btn.winfo_rootx()
+            y = self.ratio_btn.winfo_rooty() + self.ratio_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _set_ratio(self, token: str | None):
+        tokens = [t for t in self.search.get().split() if t not in RATIO_TOKENS]
+        if token:
+            tokens.append(token)
+        self.search.delete(0, tk.END)
+        self.search.insert(0, " ".join(tokens))
+        self.run_search()
 
     def _gal_background_click(self, event):
         if not self.gallery.find_withtag("current"):
@@ -509,7 +505,7 @@ class LibraryTab(ctk.CTkFrame):
 
         dbtn("Folder", self._reveal)
         self.e621_open_btn = dbtn("e621", self._open_post, T.ACCENT2, 52)
-        self.pick_btn = dbtn("+ Pick", self._add_pick, T.ACCENT, 64)
+        dbtn("Grid", self._grid, T.ACCENT, 56)
         dbtn("Copy name", lambda: self._copy(self.selected.name)
              if self.selected else None, T.DIM, 88)
 
@@ -524,58 +520,12 @@ class LibraryTab(ctk.CTkFrame):
         self.detail_tags.grid(row=3, column=0, sticky="nsew", pady=(0, 10))
         self.detail_tags.grid_columnconfigure(0, weight=1)
 
-    def _build_picks_bar(self):
-        bar = ctk.CTkFrame(self, fg_color=T.SURFACE, corner_radius=0, height=44)
-        bar.grid(row=2, column=0, columnspan=3, sticky="ew")
-        bar.grid_propagate(False)
-        bar.grid_columnconfigure(0, weight=1)
-
-        self.picks_label = ctk.CTkLabel(bar, text="Picks: none", font=font(10, mono=True),
-                                         text_color=T.DIM, anchor="w")
-        self.picks_label.grid(row=0, column=0, sticky="w", padx=18, pady=8)
-
-        right = ctk.CTkFrame(bar, fg_color="transparent")
-        right.grid(row=0, column=1, sticky="e", padx=16)
-
-        def kbtn(text, cmd, color=T.DIM):
-            b = ctk.CTkButton(right, text=text, height=26, corner_radius=6,
-                              width=100, font=font(10), fg_color=T.BTN,
-                              hover_color=T.BTN_HOV, text_color=color, command=cmd)
-            b.pack(side="left", padx=(6, 0))
-            return b
-
-        kbtn("Save set", self._picks_save_set, T.ACCENT2)
-        kbtn("Load set", self._picks_load_set, T.ACCENT2)
-        kbtn("Copy paths", self._picks_copy)
-        kbtn("Export .m3u", self._picks_m3u, T.ACCENT)
-        kbtn("Clear", self._picks_clear)
-
-    # ── brand / discretion ─────────────────────────────────────────────────
+    # ── brand ────────────────────────────────────────────────────────────
 
     def _apply_brand(self):
-        self.brand_paw.delete("all")
-        if self.cfg.discreet:
-            self.brand_name.configure(text=self.cfg.neutral_title, text_color=T.DIM)
-            self.brand_kind.configure(text="")
-            self.brand_sub.configure(text="")
-            self.brand_paw.configure(width=1)
-        else:
-            self.brand_paw.configure(width=30)
-            draw_paw(self.brand_paw, 15, 15, 26, T.ACCENT2 if self._flavored() else T.DIM)
-            self.brand_name.configure(text="PAZ", text_color=T.ACCENT2)
-            self.brand_kind.configure(text="Den")
-            self.brand_sub.configure(text=f"{self.F('tagline')} · Library")
+        self.brand_sub.configure(text=f"{self.F('tagline')} · Library")
         self.sync_btn.configure(text=self.F("sync"))
         self.fetch_btn.configure(text=self.F("fetch"))
-
-    def on_discreet_changed(self):
-        self._apply_brand()
-        self.peek.hide()
-        self.render_page()
-        self._render_details()
-
-    def on_boss_key(self):
-        self._peek_hide()
 
     def _bind_local_keys(self):
         """Bindings that only ever make sense inside this tab's own widgets
@@ -609,14 +559,10 @@ class LibraryTab(ctk.CTkFrame):
             self.player.nudge(seconds)
             return "break"
 
-    def key_pick(self, event):
+    def key_grid(self, event):
         if self.is_typing(event):
             return
-        if self.selected:
-            if self.selected.path in self.picks:
-                self._remove_pick(self.selected.path)
-            else:
-                self._add_pick_rec(self.selected)
+        self._grid()
         return "break"
 
     def key_copy_name(self, event):
@@ -642,15 +588,6 @@ class LibraryTab(ctk.CTkFrame):
             self.selected = None
             self._restyle_cards()
             self._render_details()
-        return "break"
-
-    def key_size(self, event):
-        if self.is_typing(event):
-            return
-        label = {"1": "S", "2": "M", "3": "L", "4": "XL"}.get(event.keysym)
-        if label:
-            self.size_seg.set(label)
-            self._set_card_size(label)
         return "break"
 
     def key_random(self, event):
@@ -786,32 +723,7 @@ class LibraryTab(ctk.CTkFrame):
             else:
                 chip.configure(text_color=T.DIM, state="normal")
 
-    def premium_index(self, refresh: bool = False) -> dict:
-        if not refresh and getattr(self, "_premium_idx", None) is not None:
-            return self._premium_idx
-        index: dict = {}
-        root = self.cfg.premium_root
-        if root and os.path.isdir(root):
-            for base, dirs, names in os.walk(root):
-                prune_dirs(dirs)
-                for name in names:
-                    if os.path.splitext(name)[1].lower() == ".mp4":
-                        index.setdefault(name, os.path.join(base, name))
-                        stem = os.path.splitext(name)[0]
-                        index.setdefault(stem, os.path.join(base, name))
-        self._premium_idx = index
-        return index
-
-    def premium_twin(self, path: str) -> str | None:
-        index = self.premium_index()
-        name = os.path.basename(path)
-        if name in index:
-            return index[name]
-        stem = os.path.splitext(name)[0]
-        return index.get(stem)
-
     def _load_library(self):
-        self._premium_idx = None
         conn = db_connect()
         rows = conn.execute(
             "SELECT path,name,folder,pid,size,mtime,duration,width,height,fps "
@@ -1069,13 +981,12 @@ class LibraryTab(ctk.CTkFrame):
 
     # ── gallery ─────────────────────────────────────────────────────────────
 
-    CARD_SIZES = {"Small": 176, "Medium": 224, "Large": 288, "Huge": 360}
     CARD_W, IMG_H = 224, 126
     CAP_H, GAP = 42, 10
 
     @property
     def card_width(self) -> int:
-        return self.CARD_SIZES.get(self.cfg.card_size, 224)
+        return max(120, min(int(self.cfg.card_width), 480))
 
     def _leave_grid(self, _event=None):
         self._set_hover(None)
@@ -1092,15 +1003,22 @@ class LibraryTab(ctk.CTkFrame):
                 pass
         self._resize_after = self.after(180, self.render_page)
 
-    def _pick_page(self):
-        added = 0
-        for slot in self._layout:
-            path = slot["rec"].path
-            if path not in self.picks:
-                self.picks.append(path)
-                added += 1
-        self._picks_refresh()
-        self.set_status(f"Added {added} clips to Picks ({len(self.picks)} total)", T.OK)
+    def _grid(self):
+        rec = self.selected
+        if not rec or not os.path.exists(rec.path):
+            self.set_status("Select a clip first for its contact sheet.", T.DIM)
+            return
+        ContactSheet(self.root, self.frames, rec.path, rec.name, on_jump=self._grid_jump)
+
+    def _grid_jump(self, moment: float) -> None:
+        if not self.selected:
+            return
+        if self.player.playing:
+            self.player.engine.seek(moment)
+        else:
+            self.player.engine.position = moment
+            self.player.play()
+        self.player._draw_bar()
 
     def _random(self):
         if not self.filtered:
@@ -1204,8 +1122,7 @@ class LibraryTab(ctk.CTkFrame):
                                fill=T.RATING.get(rec.rating, T.DIM), font=(T.UI, 7),
                                anchor="w", tags=(tag,))
             tx += 12
-        title = rec.artists[0] if (rec.artists and not self.cfg.discreet) \
-            else (rec.pid or os.path.splitext(rec.name)[0])
+        title = rec.artists[0] if rec.artists else (rec.pid or os.path.splitext(rec.name)[0])
         canvas.create_text(tx, y + self.IMG_H + 15,
                            text=self._ellipsize(title, x + self.CARD_W - tx - 4),
                            fill=T.TEXT, font=(T.UI, 10), anchor="w", tags=(tag, f"tt{index}"))
@@ -1239,8 +1156,6 @@ class LibraryTab(ctk.CTkFrame):
             return T.ACCENT
         if hover:
             return T.ACCENT_HOV
-        if rec.path in self.picks:
-            return T.ACCENT2
         return T.LINE_SOFT
 
     def _restyle_cards(self):
@@ -1286,8 +1201,7 @@ class LibraryTab(ctk.CTkFrame):
             return
         try:
             image = Image.open(io.BytesIO(data))
-            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit,
-                              blur=self.cfg.discreet)
+            image = fit_frame(image, self.CARD_W, self.IMG_H, self.cfg.thumb_fit)
             image = round_corners(image, 9, T.SURFACE)
             photo = ImageTk.PhotoImage(image)
         except Exception:
@@ -1304,9 +1218,6 @@ class LibraryTab(ctk.CTkFrame):
                                 tags=(slot["tag"],))
         canvas.create_text(bx - pad, by - 2, text=text, fill=T.TEXT, font=(T.MONO, 8),
                            anchor="se", tags=(slot["tag"],))
-        if rec.path in self.picks:
-            canvas.create_text(slot["x"] + 8, slot["y"] + 6, text="★", fill=T.ACCENT2,
-                               font=(T.UI, 11), anchor="nw", tags=(slot["tag"],))
         canvas.tag_raise(f"bar{index}")
 
     # ── hover scrub ─────────────────────────────────────────────────────────
@@ -1353,10 +1264,11 @@ class LibraryTab(ctk.CTkFrame):
         if token != self._peek_token or self._peek_path != rec.path:
             return
         title = rec.pid or rec.name
-        if rec.artists and not self.cfg.discreet:
+        if rec.artists:
             title = f"{rec.artists[0]} · #{rec.pid}"
+        fraction = (moment / rec.duration) if rec.duration else None
         self.peek.show_frame(data, title, fmt_clock(moment), x_root, y_root,
-                             blur=self.cfg.discreet)
+                             fraction=fraction)
 
     def _peek_hide(self):
         self._peek_path = None
@@ -1419,7 +1331,6 @@ class LibraryTab(ctk.CTkFrame):
         if not rec:
             self.detail_name.configure(text="Nothing selected")
             self.detail_meta.configure(text="")
-            self.pick_btn.configure(text="+ Pick")
             return
 
         self.detail_name.configure(text=rec.name)
@@ -1432,7 +1343,6 @@ class LibraryTab(ctk.CTkFrame):
         if rec.pid:
             bits.append(f"#{rec.pid}")
         self.detail_meta.configure(text="  ·  ".join(bits))
-        self.pick_btn.configure(text="★ Picked" if rec.path in self.picks else "+ Pick")
 
         groups = [
             ("Artists", "artist:", rec.artists, T.ACCENT2),
@@ -1440,9 +1350,8 @@ class LibraryTab(ctk.CTkFrame):
             ("Species", "species:", rec.species, T.OK),
             ("Series", "copyright:", rec.copyrights, T.WARN),
             ("Lore", "lore:", rec.lore, T.ACCENT2_HOV),
+            ("Tags", "", sorted(rec.tags - rec.named), T.DIM),
         ]
-        if not self.cfg.discreet:
-            groups.append(("Tags", "", sorted(rec.tags - rec.named), T.DIM))
 
         row = 0
         any_content = False
@@ -1524,13 +1433,8 @@ class LibraryTab(ctk.CTkFrame):
         menu.add_command(label="Show in folder", command=lambda: open_in_explorer(rec.path))
         if rec.pid:
             menu.add_command(label=f"Open e621 post #{rec.pid}",
-                             state="disabled" if self.cfg.discreet else "normal",
                              command=lambda: self._open_url(rec))
         menu.add_separator()
-        if rec.path in self.picks:
-            menu.add_command(label="Remove from Picks", command=lambda: self._remove_pick(rec.path))
-        else:
-            menu.add_command(label="Add to Picks", command=lambda: self._add_pick_rec(rec))
         copy_menu = tk.Menu(menu, tearoff=0, bg=T.ELEVATED, fg=T.TEXT,
                             activebackground=T.ACCENT_DEEP, activeforeground=T.TEXT,
                             bd=0, font=(T.UI, 10))
@@ -1572,112 +1476,13 @@ class LibraryTab(ctk.CTkFrame):
             self._open_url(self.selected)
 
     def _open_url(self, rec: Rec):
-        if not rec.pid or self.cfg.discreet:
+        if not rec.pid:
             return
         url = rec.url or E621_POST.format(pid=rec.pid)
         try:
             webbrowser.open(url)
         except Exception:
             self._copy(url)
-
-    # ── picks ───────────────────────────────────────────────────────────────
-
-    def _add_pick(self):
-        if self.selected:
-            self._add_pick_rec(self.selected)
-
-    def _add_pick_rec(self, rec: Rec):
-        if rec.path not in self.picks:
-            self.picks.append(rec.path)
-            self._picks_refresh()
-
-    def _remove_pick(self, path: str):
-        if path in self.picks:
-            self.picks.remove(path)
-            self._picks_refresh()
-
-    def _picks_refresh(self):
-        if not self.picks:
-            self.picks_label.configure(
-                text="Picks (your edit shortlist): empty - press P on a clip "
-                     "or right-click > Add to Picks, then export below")
-        else:
-            total = sum((self.by_path[p].size for p in self.picks if p in self.by_path), 0)
-            seconds = sum((self.by_path[p].duration for p in self.picks if p in self.by_path), 0.0)
-            twins = sum(1 for p in self.picks if self.premium_twin(p))
-            label = (f"Picks: {len(self.picks)} clips · {fmt_size(total)} · "
-                    f"{fmt_len(seconds)} · {twins}/{len(self.picks)} have a 4K60 version")
-            if getattr(self, "current_set", ""):
-                label = f"[{self.current_set}]  " + label
-            self.picks_label.configure(text=label)
-        self.render_page()
-        if self.selected:
-            self.pick_btn.configure(text="★ Picked" if self.selected.path in self.picks
-                                    else "+ Pick")
-
-    def _picks_save_set(self):
-        if not self.picks:
-            self.set_status("Nothing picked yet - press P on clips first.", T.WARN)
-            return
-        dialog = ctk.CTkInputDialog(text=f"Name this set of {len(self.picks)} clips:",
-                                    title="Save pick set")
-        name = (dialog.get_input() or "").strip()
-        if not name:
-            return
-        self.cfg.pick_sets[name] = list(self.picks)
-        self.cfg.save()
-        self.set_status(f"Saved '{name}' ({len(self.picks)} clips)", T.OK)
-        self._picks_refresh()
-
-    def _picks_load_set(self):
-        if not self.cfg.pick_sets:
-            self.set_status("No saved sets yet - pick some clips and press Save set.", T.WARN)
-            return
-        PickSetsWindow(self.root, self)
-
-    def apply_pick_set(self, name: str):
-        paths = [p for p in self.cfg.pick_sets.get(name, []) if os.path.exists(p)]
-        missing = len(self.cfg.pick_sets.get(name, [])) - len(paths)
-        self.picks = paths
-        self.current_set = name
-        self._picks_refresh()
-        self.set_status(f"Loaded '{name}': {len(paths)} clips"
-                        + (f" ({missing} no longer on disk)" if missing else ""),
-                        T.OK if not missing else T.WARN)
-
-    def delete_pick_set(self, name: str):
-        self.cfg.pick_sets.pop(name, None)
-        self.cfg.save()
-
-    def _picks_copy(self):
-        if self.picks:
-            self._copy("\n".join(self.picks))
-            self.set_status(f"{len(self.picks)} paths copied", T.OK)
-
-    def _picks_m3u(self):
-        if not self.picks:
-            return
-        from tkinter import filedialog
-        path = filedialog.asksaveasfilename(
-            title="Export playlist", defaultextension=".m3u", initialfile="picks.m3u",
-            filetypes=[("Playlist", "*.m3u")])
-        if not path:
-            return
-        try:
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write("#EXTM3U\n")
-                for item in self.picks:
-                    rec = self.by_path.get(item)
-                    if rec:
-                        fh.write(f"#EXTINF:{int(rec.duration)},{rec.name}\n")
-                    fh.write(item + "\n")
-            self.set_status(f"Playlist saved: {os.path.basename(path)}", T.OK)
-        except OSError as exc:
-            self.set_status(f"Could not save playlist: {exc}", T.FAIL)
-
-    def _picks_clear(self):
-        self.picks = []
-        self._picks_refresh()
 
     # ── sync (incremental index build) ──────────────────────────────────────
 

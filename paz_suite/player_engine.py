@@ -21,9 +21,9 @@ import queue
 import subprocess
 import threading
 
-from PIL import Image, ImageFilter, ImageTk
+from PIL import Image, ImageTk
 
-from .files import NO_WINDOW, open_file
+from .files import NO_WINDOW
 from .media import read_exact, has_ffplay
 
 HAS_FFPLAY = has_ffplay()
@@ -32,13 +32,11 @@ HAS_FFPLAY = has_ffplay()
 class ClipPlayer:
 
     def __init__(self, canvas, width: int, height: int,
-                 get_discreet=lambda: False,
                  on_tick=None, on_state=None, on_fail=None, on_eof=None):
         self.canvas = canvas
         self.view_w = max(int(width) // 2 * 2, 240)
         self.view_h = max(int(height), 135)
         self.frame_bytes = self.view_w * self.view_h * 3
-        self.get_discreet = get_discreet
         self.on_tick = on_tick          # called(position) after each frame
         self.on_state = on_state        # called(playing: bool)
         self.on_fail = on_fail          # called(message)
@@ -165,10 +163,6 @@ class ClipPlayer:
             self._kill_audio()
         elif self.playing and not self.muted:
             self._spawn_audio(self.position)
-
-    def open_externally(self) -> None:
-        if self.path:
-            open_file(self.path)
 
     # ── decoding ────────────────────────────────────────────────────────
 
@@ -337,8 +331,6 @@ class ClipPlayer:
     def _blit(self, chunk: bytes):
         try:
             image = Image.frombytes("RGB", (self.view_w, self.view_h), chunk)
-            if self.get_discreet():
-                image = image.filter(ImageFilter.GaussianBlur(max(self.view_w // 22, 10)))
             self._photo = ImageTk.PhotoImage(image)
         except Exception:
             return

@@ -12,11 +12,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from tkinter import messagebox, ttk
 
 import customtkinter as ctk
-from PIL import Image, ImageFilter, ImageTk
+from PIL import Image, ImageTk
 
-from .theme import T, font, draw_paw
+from .theme import T, font
 from .format import fmt_clock, fmt_size
-from .files import open_file, open_in_explorer
+from .files import open_in_explorer
 from .media import MediaInfo, ThumbCache, probe, dhash, hamming
 from .widgets import PeekWindow
 from .player_engine import ClipPlayer, HAS_FFPLAY
@@ -389,21 +389,15 @@ class ScrubPreview(ctk.CTkFrame):
 
     STRIP_COUNT_MIN = 6
 
-    def __init__(self, parent, cache: ThumbCache, is_discreet=None,
-                 is_flavored=None, **kw):
+    def __init__(self, parent, cache: ThumbCache, cfg, **kw):
         super().__init__(parent, fg_color=T.SURFACE, corner_radius=12,
                           border_width=1, border_color=T.LINE, **kw)
         self.cache = cache
-        self.is_discreet = is_discreet or (lambda: False)
-        self.is_flavored = is_flavored or (lambda: True)
+        self.cfg = cfg
         self.on_grid = None            # wired by the tab: opens the contact sheet
         self.peek = PeekWindow(self)
         self._ghost_after = None
         self._ghost_token = 0
-        self._skim = False
-        self._skim_index = 0
-        self._skim_frames: dict = {}
-        self._skim_after = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -426,11 +420,14 @@ class ScrubPreview(ctk.CTkFrame):
         self.view.bind("<Button-1>", lambda e: self.toggle_play())
 
         # Real playback (with audio) shares the same view canvas as the
-        # static scrub/skim frames - only one is ever active at a time.
+        # static scrub frames - only one is ever active at a time.
         self.player_engine = ClipPlayer(
-            self.view, 480, 270, get_discreet=self.is_discreet,
+            self.view, 480, 270,
             on_tick=self._on_play_tick, on_state=self._on_play_state,
             on_fail=self._on_play_fail)
+        self.player_engine.volume = max(0, min(int(cfg.player_volume), 100))
+        self.player_engine.muted = bool(cfg.player_muted) or not HAS_FFPLAY
+        self._volume_job = None
 
         self.timeline = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
                                    borderwidth=0, height=26, cursor="sb_h_double_arrow")
@@ -466,17 +463,30 @@ class ScrubPreview(ctk.CTkFrame):
             font=font(12), fg_color=T.BTN, hover_color=T.BTN_HOV,
             text_color=T.ACCENT, command=self.toggle_play)
         self.play_btn.pack(side="left", padx=(0, 4))
-        self.mute_btn = tbtn("🔇" if not HAS_FFPLAY else "🔊", self._toggle_mute, width=30)
-        self.mute_btn.configure(state="normal" if HAS_FFPLAY else "disabled")
-        self.mute_btn.pack(side="left", padx=(0, 8))
         tbtn("◀", lambda: self.step(-1)).pack(side="left", padx=(0, 4))
-        self.skim_btn = tbtn("▶ Skim", self.toggle_skim, width=70)
-        self.skim_btn.pack(side="left", padx=(0, 4))
         tbtn("▶", lambda: self.step(1)).pack(side="left", padx=(0, 4))
         tbtn("Grid", lambda: self.on_grid() if self.on_grid else None,
              width=48).pack(side="left", padx=(0, 4))
-        tbtn("Player", lambda: open_file(self._current_path()), width=56
-             ).pack(side="left")
+
+        volume_box = ctk.CTkFrame(transport, fg_color="transparent")
+        volume_box.pack(side="left", padx=(8, 0))
+        self.mute_btn = ctk.CTkButton(
+            volume_box, text="🔇" if self.player_engine.muted else "🔊",
+            width=28, height=26, corner_radius=6, font=font(11),
+            fg_color="transparent", hover_color=T.BTN_HOV,
+            text_color=T.FAINT if self.player_engine.muted else T.TEXT,
+            state="normal" if HAS_FFPLAY else "disabled",
+            command=self._toggle_mute)
+        self.mute_btn.pack(side="left")
+        self.volume_slider = ctk.CTkSlider(
+            volume_box, from_=0, to=100, number_of_steps=100, width=64,
+            height=14, button_color=T.ACCENT, button_hover_color=T.ACCENT_HOV,
+            progress_color=T.ACCENT, fg_color=T.LINE,
+            command=self._on_volume_drag)
+        self.volume_slider.set(0 if self.player_engine.muted else self.player_engine.volume)
+        self.volume_slider.pack(side="left", padx=(6, 0))
+        if not HAS_FFPLAY:
+            self.volume_slider.configure(state="disabled")
 
         self.meta = ctk.CTkLabel(footer, text="", font=font(10, mono=True),
                                   text_color=T.DIM, anchor="w")
@@ -500,7 +510,6 @@ class ScrubPreview(ctk.CTkFrame):
         self.clear("Select a file to inspect it")
 
     def clear(self, message: str = "Nothing loaded") -> None:
-        self.stop_skim()
         self.player_engine.clear()
         self._ghost_hide()
         self._token += 1
@@ -534,7 +543,6 @@ class ScrubPreview(ctk.CTkFrame):
             self.clear("That file is no longer on disk")
             return
 
-        self.stop_skim()
         self.player_engine.stop()
         self._ghost_hide()
         self._paths = paths
@@ -556,7 +564,6 @@ class ScrubPreview(ctk.CTkFrame):
         self.note.configure(text=text or "", text_color=colour)
 
     def _probe_async(self, position: float | None) -> None:
-        self.stop_skim()
         path = self._current_path()
         if not path:
             return
@@ -590,7 +597,6 @@ class ScrubPreview(ctk.CTkFrame):
     def step(self, delta: float) -> None:
         if not self._paths:
             return
-        self.stop_skim()
         self.player_engine.pause()
         duration = self._info.duration if self._info else 0.0
         limit = max(duration - 0.05, 0.0) if duration else self._pos + abs(delta)
@@ -614,7 +620,6 @@ class ScrubPreview(ctk.CTkFrame):
         """Jump straight to a timecode (used by the contact sheet)."""
         if not self._paths:
             return
-        self.stop_skim()
         self.player_engine.pause()
         duration = self._duration()
         limit = max(duration - 0.05, 0.0) if duration else seconds
@@ -639,7 +644,6 @@ class ScrubPreview(ctk.CTkFrame):
     def toggle_play(self) -> None:
         if not self._current_path() or not self._duration():
             return
-        self.stop_skim()
         self._ghost_hide()
         self._sync_player_size(self.view.winfo_width(), self.view.winfo_height())
         if not self.player_engine.playing:
@@ -650,6 +654,27 @@ class ScrubPreview(ctk.CTkFrame):
         muted = self.player_engine.toggle_mute()
         self.mute_btn.configure(text="🔇" if muted else "🔊",
                                 text_color=T.FAINT if muted else T.TEXT)
+        self.volume_slider.set(0 if muted else self.player_engine.volume)
+        self.cfg.player_muted = muted
+        self.cfg.save()
+
+    def _on_volume_drag(self, value) -> None:
+        volume = max(0, min(int(round(float(value))), 100))
+        if self.player_engine.muted and volume > 0:
+            self.mute_btn.configure(text="🔊", text_color=T.TEXT)
+        if self._volume_job is not None:
+            try:
+                self.after_cancel(self._volume_job)
+            except ValueError:
+                pass
+        self._volume_job = self.after(220, lambda: self._commit_volume(volume))
+
+    def _commit_volume(self, volume: int) -> None:
+        self._volume_job = None
+        self.player_engine.set_volume(volume)
+        self.cfg.player_volume = self.player_engine.volume
+        self.cfg.player_muted = self.player_engine.muted
+        self.cfg.save()
 
     def _on_play_state(self, playing: bool) -> None:
         self.play_btn.configure(
@@ -704,10 +729,6 @@ class ScrubPreview(ctk.CTkFrame):
         self.view.delete("all")
         w = max(self.view.winfo_width(), 40)
         h = max(self.view.winfo_height(), 40)
-        if self.is_flavored() and not self.is_discreet() and w > 200 and h > 140:
-            draw_paw(self.view, w * 0.50, h * 0.34, min(w, h) * 0.34, T.LINE_SOFT)
-            draw_paw(self.view, w * 0.30, h * 0.62, min(w, h) * 0.15, T.LINE_SOFT)
-            draw_paw(self.view, w * 0.70, h * 0.68, min(w, h) * 0.11, T.LINE_SOFT)
         self.view.create_text(w // 2, h // 2, text=getattr(self, "_placeholder", ""),
                                fill=T.FAINT, font=(T.UI, 11), width=w - 40)
 
@@ -757,9 +778,6 @@ class ScrubPreview(ctk.CTkFrame):
             box_w = max(self.view.winfo_width() - 4, 100)
             box_h = max(self.view.winfo_height() - 4, 100)
             image.thumbnail((box_w, box_h), Image.LANCZOS)
-            if self.is_discreet():
-                image = image.filter(
-                    ImageFilter.GaussianBlur(max(image.width // 22, 10)))
             photo = ImageTk.PhotoImage(image)
         except Exception:
             self._show_message("Frame could not be decoded")
@@ -822,7 +840,6 @@ class ScrubPreview(ctk.CTkFrame):
         if not self._duration():
             return
         self._ghost_hide()
-        self.stop_skim()
         self.player_engine.pause()
         self._dragging = True
         self._pos = self._time_at(event.x)
@@ -880,9 +897,10 @@ class ScrubPreview(ctk.CTkFrame):
     def _ghost_show(self, data, moment, token, x_root, y_root) -> None:
         if token != self._ghost_token or self._dragging:
             return
+        duration = self._duration()
+        fraction = (moment / duration) if duration else None
         self.peek.show_frame(data, os.path.basename(self._current_path() or ""),
-                              fmt_clock(moment), x_root, y_root,
-                              blur=self.is_discreet())
+                              fmt_clock(moment), x_root, y_root, fraction=fraction)
 
     def _ghost_hide(self) -> None:
         self._ghost_token += 1
@@ -969,8 +987,6 @@ class ScrubPreview(ctk.CTkFrame):
         try:
             image = Image.open(io.BytesIO(data))
             image = image.resize((cell_w, cell_h), Image.LANCZOS)
-            if self.is_discreet():
-                image = image.filter(ImageFilter.GaussianBlur(6))
             photo = ImageTk.PhotoImage(image)
         except Exception:
             return
@@ -981,7 +997,6 @@ class ScrubPreview(ctk.CTkFrame):
     def _on_strip_click(self, event):
         if not self._strip_marks:
             return
-        self.stop_skim()
         self.player_engine.pause()
         cell_w, _, gap = self._cell_geometry()
         if cell_w <= 0:
@@ -991,64 +1006,6 @@ class ScrubPreview(ctk.CTkFrame):
             self._pos = self._strip_marks[index]
             self._draw_timeline()
             self._request_frame(immediate=True)
-
-    def toggle_skim(self) -> None:
-        if self._skim:
-            self.stop_skim()
-        else:
-            self.start_skim()
-
-    def start_skim(self) -> None:
-        if not self._strip_marks or not self._current_path():
-            return
-        self.player_engine.pause()
-        self._skim = True
-        self.skim_btn.configure(text="■ Stop", text_color=T.ACCENT,
-                                 fg_color=T.ACCENT_DEEP)
-        self._skim_index = 0
-        self._skim_frames = {}
-        path = self._current_path()
-        width = max(self.view.winfo_width(), 320)
-        token = self._token = self._token + 1
-
-        def work():
-            for index, mark in enumerate(self._strip_marks):
-                if not self._skim or token != self._token:
-                    return
-                data = self.cache.frame(path, mark, width)
-                if data and self._skim and token == self._token:
-                    self._skim_frames[index] = data
-
-        threading.Thread(target=work, daemon=True).start()
-        self._skim_tick(token)
-
-    def stop_skim(self) -> None:
-        if self._skim_after is not None:
-            try:
-                self.after_cancel(self._skim_after)
-            except ValueError:
-                pass
-            self._skim_after = None
-        if self._skim:
-            self._skim = False
-            self._skim_frames = {}
-            self._draw_timeline()
-        self.skim_btn.configure(text="▶ Skim", text_color=T.DIM, fg_color=T.BTN)
-
-    def _skim_tick(self, token: int) -> None:
-        self._skim_after = None
-        if not self._skim or token != self._token:
-            return
-        count = len(self._strip_marks)
-        if count:
-            index = self._skim_index % count
-            data = self._skim_frames.get(index)
-            if data is not None:
-                self._pos = self._strip_marks[index]
-                self._draw_frame(data, token)
-                self._draw_timeline()
-                self._skim_index += 1
-        self._skim_after = self.after(150, lambda: self._skim_tick(token))
 
 
 class ContactSheet(ctk.CTkToplevel):
@@ -1061,12 +1018,11 @@ class ContactSheet(ctk.CTkToplevel):
     CELL_W = 300
 
     def __init__(self, parent, cache: ThumbCache, path: str, title: str,
-                 on_jump=None, is_discreet=None):
+                 on_jump=None):
         super().__init__(parent)
         self.cache = cache
         self.path = path
         self.on_jump = on_jump
-        self.is_discreet = is_discreet or (lambda: False)
         self.alive = True
         self._refs: list = []
         self._marks: list = []
@@ -1164,8 +1120,6 @@ class ContactSheet(ctk.CTkToplevel):
         try:
             image = Image.open(io.BytesIO(data))
             image = image.resize((self.CELL_W, self.cell_h), Image.LANCZOS)
-            if self.is_discreet():
-                image = image.filter(ImageFilter.GaussianBlur(10))
             photo = ImageTk.PhotoImage(image)
         except Exception:
             return
