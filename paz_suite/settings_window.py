@@ -353,11 +353,11 @@ class SettingsWindow(ctk.CTkToplevel):
         self._section(tab, "Setup", 7)
         ctk.CTkLabel(
             tab, wraplength=440, justify="left", font=font(11), text_color=T.DIM,
-            text=("The Beats tab needs PyTorch and beat-this installed - "
-                  "optional, since they're a large download most of the "
-                  "suite doesn't need. Open the Beats tab for the exact "
-                  "pip install command; every other tab works identically "
-                  "whether or not it's installed.")
+            text=("The Beats tab needs beat-this installed (pulls in "
+                  "PyTorch automatically) - optional, since it's a large "
+                  "download most of the suite doesn't need. Open the Beats "
+                  "tab for the exact pip install command; every other tab "
+                  "works identically whether or not it's installed.")
         ).grid(row=8, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 4))
 
     def _build_app(self, tab) -> None:

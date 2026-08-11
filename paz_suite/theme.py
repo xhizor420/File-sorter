@@ -152,10 +152,9 @@ VAULT_LABELS = {
 BEATS_LABELS = {
     "tagline":       "beat & downbeat detection",
     "idle":          "Pick a clip, then Analyze",
-    "no_deps":       "PyTorch / beat-this aren't installed",
+    "no_deps":       "beat_this isn't installed",
     "extracting":    "Extracting audio",
-    "loading_model": "Loading model (first run downloads the checkpoint)",
-    "detecting":     "Detecting beats",
+    "detecting":     "Detecting beats (first run also downloads the checkpoint)",
     "done":          "Detected {b} beats · {d} downbeats · ~{bpm} BPM",
     "cancelled":     "Cancelled",
     "failed":        "Analysis failed - see log",

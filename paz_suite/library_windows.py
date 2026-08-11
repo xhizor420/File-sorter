@@ -133,9 +133,9 @@ class HelpWindow(ctk.CTkToplevel):
          "downbeat timestamps. Export writes four files for DaVinci "
          "Resolve: a marker script (Workspace > Scripts, the safest option "
          "since it references no media), a beatgrid XML timeline, an EDL "
-         "of markers, and a plain CSV. Needs PyTorch and beat-this "
-         "installed - the tab shows the exact pip command if they aren't; "
-         "every other tab is unaffected either way."),
+         "of markers, and a plain CSV. Needs beat-this installed (pulls in "
+         "PyTorch automatically) - the tab shows the exact pip command if "
+         "it isn't; every other tab is unaffected either way."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
          "e621 URL, artist or all tags. Ctrl+C copies the name, "
          "Ctrl+Shift+C the full path."),

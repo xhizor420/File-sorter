@@ -15,8 +15,8 @@ Four tabs, one app.
   flagged later instead of getting mixed back into the unused pool.
 - **Beats** — pick a clip, run beat-this (a real trained beat/downbeat
   model, not a heuristic) against it, export DaVinci Resolve markers.
-  Optional: needs `torch` + `beat-this` installed (see below) - every
-  other tab works identically without them.
+  Optional: needs the `beat_this` command installed (see below) - every
+  other tab works identically without it.
 
 ## Setup
 
@@ -67,7 +67,7 @@ paz_suite/
   library_windows.py        hidden tags, help, folders, integrity verifier
   library_tab.py            the Library tab
   vault_tab.py              the Vault tab
-  beats_engine.py           optional torch/beat-this import, audio extraction, analysis (no UI)
+  beats_engine.py           audio extraction + beat_this CLI wrapper, analysis (no UI)
   beats_export.py           DaVinci Resolve marker export: script/XML/EDL/CSV (no UI)
   beats_tab.py              the Beats tab
   settings_window.py        the settings dialog
@@ -80,10 +80,19 @@ Developed without a display/Tk available, so changes are validated with
 `py_compile`/`pyflakes` and standalone logic tests, not by actually
 running the GUI. Smoke-test after pulling changes.
 
-The Beats tab specifically: `torch`/`beat-this` aren't installed in the
-dev environment either, so real model inference has never been run, and
-the DaVinci Resolve XML/EDL export formats are a best-understanding
-implementation, not verified against an actual Resolve import. Do one
+The Beats tab specifically: `beat_this` isn't installed in the dev
+environment either, so it's never actually been run against real audio.
+It shells out to the `beat_this` command rather than calling its Python
+API in-process, on purpose - the project's own README and its actual
+`inference.py` source disagreed with each other on whether
+`File2Beats()` returns `(beats, downbeats)` or `(downbeats, beats)`,
+and getting that backwards would silently mislabel every downbeat. The
+CLI sidesteps it entirely: it writes a plain `.beats` file whose format
+("time in seconds, tab, beat number - 1 means downbeat") is verified
+directly against `save_beat_tsv()`'s own source, so parsing it doesn't
+depend on which of the two conflicting examples was actually right. The
+DaVinci Resolve XML/EDL export formats are still a best-understanding
+implementation, not verified against an actual Resolve import - do one
 manual round-trip in Resolve (place a few markers by hand, export to XML
 and EDL, diff against what the Beats tab produces) before relying on
 either for real editing.

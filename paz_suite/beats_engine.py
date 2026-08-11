@@ -1,13 +1,32 @@
-"""Beat/downbeat detection: audio extraction, the optional beat-this model,
-and the blocking analyze() entry point. Pure logic - no widgets - so it can
-be exercised (with the model call mocked) without a live Tk display.
+"""Beat/downbeat detection: audio extraction, the beat_this CLI, and the
+blocking analyze() entry point. Pure logic - no widgets - so it can be
+exercised (with the subprocess call stubbed) without a live Tk display.
 
-torch and beat-this are a genuinely heavy, optional install (a few hundred
-MB to ~2GB depending on CPU/GPU build) that the rest of the suite has no
-need for, so the import happens once, here, guarded - BEATS_AVAILABLE tells
-every other module (chiefly beats_tab.py) whether the real thing is usable
-without any of them ever importing torch themselves. Convert/Library/Vault
-are completely unaffected whether or not this succeeds.
+This shells out to the `beat_this` command-line tool (from `pip install
+beat-this`, https://github.com/CPJKU/beat_this) rather than importing its
+Python API in-process. Two real reasons, not just style:
+
+1. The README's Python-API example (`beats, downbeats = file2beats(...)`)
+   and the package's own source (`inference.py`'s File2File.__call__,
+   which unpacks the same call as `downbeats, beats = ...`) disagree with
+   each other on argument order. Getting that backwards here would mean
+   every real downbeat gets mislabeled as a plain beat and vice versa -
+   exactly the kind of silent, hard-to-notice accuracy bug this feature
+   exists to avoid. The CLI sidesteps the ambiguity entirely: it writes a
+   plain `.beats` file via the package's own save_beat_tsv(), whose
+   documented, unambiguous format ("time in seconds, tab, beat number -
+   1 means downbeat") is verified directly against that function's source.
+2. A subprocess can actually be killed. An in-process model call cannot be
+   cancelled once started - Cancel would only ever mean "stop caring about
+   the result," not "stop the work." Shelling out means Cancel can
+   terminate the real OS process outright, mid-run, the same way the rest
+   of this app's ffmpeg calls are already spawned and can be killed.
+
+Also means this module never needs to `import torch` itself - installing
+`beat-this` (which depends on torch) is enough, and BEATS_AVAILABLE is
+just "is the beat_this command on PATH", the same shutil.which() check
+already used for ffmpeg/ffprobe elsewhere in this codebase. Convert,
+Library and Vault are completely unaffected either way.
 """
 
 from __future__ import annotations
@@ -18,6 +37,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass, field
 
 from .config import BEATS_AUDIO_CACHE_DIR, BEATS_MODEL_DIR
@@ -28,24 +48,17 @@ from .media import probe
 # the user's shared ~/.cache/torch - same "everything lives under one
 # config root" convention as THUMB_DIR/DB_PATH. setdefault(), not a plain
 # assignment, so a TORCH_HOME the user has already set for other tools
-# isn't silently overridden.
+# isn't silently overridden. Subprocesses inherit the parent's environment
+# by default, so the beat_this CLI picks this up too.
 os.environ.setdefault("TORCH_HOME", BEATS_MODEL_DIR)
 
-try:
-    import torch
-    from beat_this.inference import File2Beats
-    BEATS_AVAILABLE = True
-    _IMPORT_ERROR = ""
-except Exception as exc:  # noqa: BLE001 - deliberately broad: a partially
-    # broken torch install (e.g. a mismatched CUDA DLL) can raise things
-    # other than ModuleNotFoundError, and none of them should propagate up
-    # through app.py's tab construction and take the whole app down.
-    torch = None
-    File2Beats = None
-    BEATS_AVAILABLE = False
-    _IMPORT_ERROR = str(exc)
+BEATS_AVAILABLE = shutil.which("beat_this") is not None
 
-PIP_HINT = f"{sys.executable} -m pip install torch beat-this"
+# beat-this pulls torch in as its own dependency, so naming it separately
+# here isn't required - it's still worth doing for the CPU-only path,
+# where installing the small CPU wheel *first* stops beat-this's own
+# install from pulling the much larger default CUDA build.
+PIP_HINT = f"{sys.executable} -m pip install beat-this"
 PIP_HINT_CPU = (f"{sys.executable} -m pip install torch "
                 "--index-url https://download.pytorch.org/whl/cpu && "
                 f"{sys.executable} -m pip install beat-this")
@@ -120,27 +133,83 @@ def extract_audio_wav(path: str) -> str | None:
     return None
 
 
-# ── model ────────────────────────────────────────────────────────────────
+# ── beat_this CLI ────────────────────────────────────────────────────────
 
-_model_lock = threading.Lock()
-_model_cache: dict = {}   # (checkpoint, device) -> File2Beats instance
+def _beats_cache_key(path: str, checkpoint: str, device: str) -> str:
+    try:
+        st = os.stat(path)
+        stamp = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        stamp = "0"
+    raw = f"{os.path.normcase(os.path.abspath(path))}|{stamp}|{checkpoint}|{device}"
+    return hashlib.md5(raw.encode("utf-8")).hexdigest() + ".beats"
 
 
-def _get_model(checkpoint: str, device: str):
-    """Construct-once, reuse-after. The first call for a given
-    (checkpoint, device) pair may trigger beat-this's own checkpoint
-    download (~78MB for final0, ~8MB for small0); every call after that in
-    this process is instant. Held under one lock rather than per-key
-    double-checked locking - analysis is already serialized by the tab's
-    own busy-guard, so the extra contention this could theoretically cause
-    never actually happens in practice."""
-    key = (checkpoint, device)
-    with _model_lock:
-        model = _model_cache.get(key)
-        if model is None:
-            model = File2Beats(checkpoint_path=checkpoint, device=device)
-            _model_cache[key] = model
-        return model
+def _terminate(proc: subprocess.Popen) -> None:
+    try:
+        proc.terminate()
+        proc.wait(timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+
+def _run_beat_this(wav_path: str, out_path: str, checkpoint: str, force_cpu: bool,
+                    cancel: threading.Event | None, timeout: float = 1800.0) -> bool:
+    """Runs `beat_this <wav> -o <out> --model <checkpoint> --gpu <n>` as a
+    real subprocess and polls for it to finish, checking `cancel` every
+    200ms so a Cancel press can actually kill the process - a genuine
+    abort, not just discarding a result we'd get anyway. `--gpu 0`
+    (default) is safe on a machine with no GPU: beat_this's own device
+    selection falls back to CPU automatically when CUDA isn't available,
+    so this only forces CPU explicitly (`--gpu -1`) when the caller asked
+    for it, rather than needing to detect GPU presence itself."""
+    cmd = ["beat_this", wav_path, "--output", out_path, "--model", checkpoint,
+           "--gpu", "-1" if force_cpu else "0"]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, creationflags=NO_WINDOW)
+    except OSError:
+        return False
+    start = time.monotonic()
+    while True:
+        code = proc.poll()
+        if code is not None:
+            return code == 0 and os.path.exists(out_path)
+        if cancel is not None and cancel.is_set():
+            _terminate(proc)
+            return False
+        if time.monotonic() - start > timeout:
+            _terminate(proc)
+            return False
+        time.sleep(0.2)
+
+
+def _parse_beats_tsv(path: str):
+    """Each line is "<time in seconds>\\t<beat number>" - beat number 1
+    means that beat is a downbeat, per save_beat_tsv()'s own documented
+    format. Returns (beats, downbeats), both lists of seconds."""
+    beats: list = []
+    downbeats: list = []
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.strip().split("\t")
+                if len(parts) < 2:
+                    continue
+                try:
+                    t = float(parts[0])
+                    number = int(float(parts[1]))
+                except ValueError:
+                    continue
+                beats.append(t)
+                if number == 1:
+                    downbeats.append(t)
+    except OSError:
+        return [], []
+    return beats, downbeats
 
 
 def _estimate_bpm(beats: list) -> float | None:
@@ -159,20 +228,23 @@ def _estimate_bpm(beats: list) -> float | None:
 def analyze(path: str, checkpoint: str = "final0", force_cpu: bool = False,
             cancel: threading.Event | None = None, on_stage=None) -> BeatResult | None:
     """Blocking - always call this off the UI thread. Returns None on a
-    missing dependency, extraction failure, cancellation, or any inference
+    missing dependency, extraction failure, cancellation, or any detection
     error; never raises to the caller.
 
-    `cancel` is checked between phases (before extraction, before model
-    load, before inference) so a Cancel press stops the job promptly
-    between steps - it cannot interrupt a checkpoint download or the
-    inference call itself mid-flight, since neither exposes a cooperative
-    cancel hook. That's a real limitation, not hidden: the caller should
-    show an honest "downloading model..." status so the wait is expected.
+    `cancel` is checked before extraction starts, and polled throughout
+    the beat_this subprocess call itself - unlike a hypothetical in-process
+    model call, this one can genuinely be killed mid-run.
 
     `on_stage`, if given, is called synchronously (from this thread, so a
     UI caller should marshal it back to the main thread itself) with one of
-    "extracting" / "loading_model" / "detecting" right before that phase
-    starts - real stage boundaries, not a guessed/animated progress bar.
+    "extracting" / "detecting" right before that phase starts. There's no
+    separate "loading model" stage to report anymore - the CLI call does
+    load + inference together as one opaque step from here.
+
+    Both the extracted WAV and the detected beats/downbeats are cached on
+    disk (the latter keyed by path+mtime+size+checkpoint+device), so
+    re-analyzing the same clip with the same settings is instant after the
+    first run - no repeat ffmpeg extraction or repeat beat_this call.
     """
     def stage(name: str) -> None:
         if on_stage is not None:
@@ -190,25 +262,27 @@ def analyze(path: str, checkpoint: str = "final0", force_cpu: bool = False,
     if cancel is not None and cancel.is_set():
         return None
 
-    device = "cpu" if (force_cpu or not torch.cuda.is_available()) else "cuda"
-    stage("loading_model")
+    device = "cpu" if force_cpu else "gpu"
     try:
-        model = _get_model(checkpoint, device)
-    except Exception:
+        os.makedirs(BEATS_AUDIO_CACHE_DIR, exist_ok=True)
+    except OSError:
         return None
+    out_path = os.path.join(BEATS_AUDIO_CACHE_DIR,
+                             _beats_cache_key(path, checkpoint, device))
+
+    stage("detecting")
+    if not os.path.exists(out_path):
+        if not _run_beat_this(wav_path, out_path, checkpoint, force_cpu, cancel):
+            return None
     if cancel is not None and cancel.is_set():
         return None
 
-    stage("detecting")
-    try:
-        raw_beats, raw_downbeats = model(wav_path)
-    except Exception:
+    beats, downbeats = _parse_beats_tsv(out_path)
+    if not beats:
         return None
 
-    beats = [float(b) for b in raw_beats]
-    downbeats = [float(d) for d in raw_downbeats]
     info = probe(path)
-    duration = info.duration if (info and info.duration) else (beats[-1] if beats else 0.0)
+    duration = info.duration if (info and info.duration) else beats[-1]
 
     return BeatResult(beats=beats, downbeats=downbeats, duration=duration,
                        checkpoint=checkpoint, device=device, source_path=path,
@@ -216,9 +290,8 @@ def analyze(path: str, checkpoint: str = "final0", force_cpu: bool = False,
 
 
 def check_beats_dependencies() -> list:
-    """Mirrors media.check_dependencies()'s shape. Audio extraction needs
-    ffmpeg - already required by the rest of the app, so this should
-    always pass, but confirming it here (like Convert's own environment
-    check) catches a broken PATH before it becomes a confusing failure
-    deep inside an analysis run."""
-    return [t for t in ("ffmpeg",) if shutil.which(t) is None]
+    """Mirrors media.check_dependencies()'s shape. ffmpeg is already
+    required by the rest of the app (should always pass, but confirming it
+    here catches a broken PATH before it becomes a confusing failure deep
+    inside an analysis run); beat_this is the optional piece."""
+    return [t for t in ("ffmpeg", "beat_this") if shutil.which(t) is None]

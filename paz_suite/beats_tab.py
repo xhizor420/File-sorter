@@ -2,10 +2,11 @@
 (beat-this, https://github.com/CPJKU/beat_this - a trained model, not a
 heuristic), exported as DaVinci Resolve markers.
 
-torch/beat-this are an optional, heavy dependency - this module never
-imports them directly, only checks beats_engine.BEATS_AVAILABLE, so the
-rest of the suite (Convert/Library/Vault) is completely unaffected whether
-or not they're installed. When they aren't, this tab shows a "not
+beat-this (which pulls in torch as its own dependency) is optional and
+heavy - this module never imports it directly, only checks
+beats_engine.BEATS_AVAILABLE (whether the beat_this command is on PATH),
+so the rest of the suite (Convert/Library/Vault) is completely unaffected
+whether or not it's installed. When it isn't, this tab shows a "not
 installed" screen with a copy-pasteable pip command instead of the app
 failing to start.
 """
@@ -119,22 +120,16 @@ class BeatsTab(ctk.CTkFrame):
                      text_color=T.TEXT).pack(anchor="w")
         ctk.CTkLabel(
             inner, wraplength=440, justify="left", font=font(11), text_color=T.DIM,
-            text=("This tab needs PyTorch and beat-this for real neural "
-                  "beat/downbeat detection - a trained model evaluated against "
-                  "human-annotated benchmarks, not a heuristic. Convert, "
-                  "Library and Vault are completely unaffected either way.")
+            text=("This tab needs the beat_this command (from `pip install "
+                  "beat-this`) for real neural beat/downbeat detection - a "
+                  "trained model evaluated against human-annotated "
+                  "benchmarks, not a heuristic. Convert, Library and Vault "
+                  "are completely unaffected either way.")
         ).pack(anchor="w", pady=(8, 18))
 
         self._pip_row(inner, "Recommended:", beats_engine.PIP_HINT)
         self._pip_row(inner, "CPU-only (smaller download, no GPU needed):",
                        beats_engine.PIP_HINT_CPU)
-
-        if beats_engine._IMPORT_ERROR:
-            ctk.CTkLabel(
-                inner, text=f"Import error: {beats_engine._IMPORT_ERROR}",
-                font=font(9, mono=True), text_color=T.FAINT,
-                wraplength=440, justify="left"
-            ).pack(anchor="w", pady=(14, 0))
 
     def _pip_row(self, parent, label: str, command: str) -> None:
         row = ctk.CTkFrame(parent, fg_color="transparent")
@@ -459,7 +454,7 @@ class BeatsTab(ctk.CTkFrame):
     def _on_stage(self, stage_name: str, token: int) -> None:
         if token != self._token:
             return
-        fractions = {"extracting": 0.15, "loading_model": 0.45, "detecting": 0.75}
+        fractions = {"extracting": 0.15, "detecting": 0.5}
         self.progress.set(fractions.get(stage_name, 0.5))
         self.logview.write(self.F(stage_name), "info")
 
