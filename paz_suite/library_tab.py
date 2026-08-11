@@ -33,7 +33,6 @@ from .library_db import (
 from .library_player import InlinePlayer
 from .library_windows import HiddenTagsWindow, HelpWindow, FoldersWindow, VerifyWindow
 from .convert_widgets import ContactSheet
-from .widgets import PeekWindow
 
 RATIO_TOKENS = ("is:portrait", "is:widescreen", "is:square")
 
@@ -1346,9 +1345,18 @@ class LibraryTab(ctk.CTkFrame):
 
     def _peek_run(self, request) -> None:
         rec, moment, token, x_root, y_root = request
+        frac = (moment / rec.duration) if rec.duration else 0.0
 
         def work():
-            data = self.frames.frame(rec.path, moment, PeekWindow.W)
+            # storyboard_frame() crops a pre-built sprite sheet instead of
+            # spawning ffmpeg per hover - see media.py for why. The sprite
+            # itself still needs one ffmpeg pass the first time a clip is
+            # hovered, hence still doing this off the UI thread. Cell width
+            # stays at the cache's own default rather than matching the
+            # preview bubble 1:1 - keeping the sprite (and the handful kept
+            # in memory) small matters more than a perfectly crisp hover
+            # thumbnail here.
+            data = self.frames.storyboard_frame(rec.path, rec.duration, frac)
             self.ui(self._peek_done, rec, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()

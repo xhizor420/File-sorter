@@ -145,11 +145,18 @@ already spent on a project.
   itself was also quietly capping every clip's playback to 30fps
   regardless of source, which is why 60fps footage never looked as smooth
   as it should have; it now decodes and displays at the real source rate,
-  and repaints the video frame in place instead of rebuilding it from
-  scratch every frame, which is also just faster across the board. The
-  gallery's and player's hover-scrub preview now runs at most one frame
-  extraction at a time instead of firing a new one on every mouse-move
-  tick, so it tracks the cursor instead of trailing behind it.
+  repainting the video frame in place instead of rebuilding it from
+  scratch every frame so it can actually keep up at 60fps.
+- **Hover-scrub is a pre-built storyboard now, not a live ffmpeg call per
+  hover.** Every hover used to spawn a full ffmpeg process (seek, decode,
+  scale, encode, write) to pull one frame - no amount of debouncing makes
+  a subprocess round trip feel instant, so scrubbing always trailed
+  behind the cursor. The gallery, the Library player's seek bar, the
+  Convert queue rows and the inspector timeline now all pull from a
+  single sprite sheet of evenly-spaced thumbnails generated once per clip
+  (the same trick YouTube's own hover preview uses) - hovering is just an
+  in-memory crop after that first look, cached both on disk and in
+  memory so scrubbing back over a clip you already hovered costs nothing.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the

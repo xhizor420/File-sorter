@@ -28,7 +28,7 @@ from .convert_engine import (
 from .convert_widgets import (
     QueueTable, STATE_LABELS, ScrubPreview, ContactSheet, DuplicateWindow,
 )
-from .widgets import Card, Bar, StatTile, JobPanel, LogView, LibraryBar, PeekWindow
+from .widgets import Card, Bar, StatTile, JobPanel, LogView, LibraryBar
 
 
 class ConvertTab(ctk.CTkFrame):
@@ -62,6 +62,8 @@ class ConvertTab(ctk.CTkFrame):
         self._peek_after = None
         self._peek_token = 0
         self._peek_iid: str | None = None
+        self._peek_busy = False
+        self._peek_pending = None
 
         self.grid_columnconfigure(0, weight=5, uniform="cols")
         self.grid_columnconfigure(1, weight=3, uniform="cols")
@@ -454,14 +456,37 @@ class ConvertTab(ctk.CTkFrame):
         moment = max(0.0, min(frac * info.duration, info.duration - 0.05))
         self._peek_token += 1
         token = self._peek_token
+        request = (task, path, moment, info.duration, token, x_root, y_root)
+        if self._peek_busy:
+            # One extraction in flight at a time - only the latest hover
+            # position matters, so it replaces whatever was pending
+            # instead of piling up overlapping ffmpeg calls.
+            self._peek_pending = request
+            return
+        self._peek_busy = True
+        self._peek_run(request)
+
+    def _peek_run(self, request) -> None:
+        task, path, moment, duration, token, x_root, y_root = request
+        frac = moment / duration
 
         def work():
-            data = self.cache.frame(path, moment, PeekWindow.W)
-            if token != self._peek_token:
-                return
-            self.ui(self._peek_show, task, data, moment, token, x_root, y_root)
+            # A pre-built sprite sheet crop instead of an ffmpeg spawn per
+            # hover - see ThumbCache.storyboard_frame() in media.py.
+            data = self.cache.storyboard_frame(path, duration, frac)
+            self.ui(self._peek_done, task, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _peek_done(self, task: Task, data, moment, token, x_root, y_root) -> None:
+        self._peek_busy = False
+        if token == self._peek_token:
+            self._peek_show(task, data, moment, token, x_root, y_root)
+        pending = self._peek_pending
+        self._peek_pending = None
+        if pending is not None:
+            self._peek_busy = True
+            self._peek_run(pending)
 
     def _peek_show(self, task: Task, data, moment, token, x_root, y_root):
         if token != self._peek_token or self._peek_iid != task.iid:
@@ -478,6 +503,7 @@ class ConvertTab(ctk.CTkFrame):
     def _peek_hide(self):
         self._peek_iid = None
         self._peek_token += 1
+        self._peek_pending = None
         if self._peek_after is not None:
             try:
                 self.after_cancel(self._peek_after)

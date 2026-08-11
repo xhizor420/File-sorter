@@ -6,6 +6,7 @@ duplicate finder.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -272,6 +273,15 @@ class ThumbCache:
     identical ones.
     """
 
+    # Grid size for the hover-scrub storyboard - a fixed 30 cells is plenty
+    # of granularity for anything from a few seconds to a long clip. Not to
+    # be confused with cfg.filmstrip_frames / ScrubPreview's own filmstrip,
+    # the row of individual thumbnails under Convert's timeline - this is
+    # a separate, invisible sprite sheet purely for instant hover preview.
+    BOARD_COLS = 6
+    BOARD_ROWS = 5
+    BOARD_CELL_W = 160
+
     def __init__(self, limit: int = 30000, subdir: str = "paz_frames"):
         self.root = os.path.join(tempfile.gettempdir(), subdir)
         self.limit = limit
@@ -281,6 +291,12 @@ class ThumbCache:
             os.makedirs(self.root, exist_ok=True)
         except OSError:
             self.root = ""
+        # A handful of decoded sprite sheets kept in memory - hovering
+        # back and forth over the *same* clip (the common case) then
+        # costs nothing but a PIL crop, not even a disk read.
+        self._sprites: "OrderedDict[str, Image.Image]" = OrderedDict()
+        self._sprites_lock = threading.Lock()
+        self._SPRITE_LIMIT = 12
 
     def _key(self, path: str, pos: float, width: int) -> str:
         try:
@@ -339,6 +355,116 @@ class ThumbCache:
                 os.remove(tmp_path)
             except OSError:
                 pass
+
+    # ── storyboard: hover-scrub without spawning ffmpeg per hover ────────
+    #
+    # frame() above is a full ffmpeg spawn (seek + decode + scale + encode
+    # + write) per call - fine for a one-off frame, but no amount of
+    # debouncing or coalescing makes a ~100ms+ subprocess round trip per
+    # mouse-move feel instant. YouTube's own hover scrub works because
+    # it's indexing into a pre-built storyboard image, not re-decoding the
+    # source on every hover. storyboard() does the same thing: one ffmpeg
+    # pass tiles evenly-spaced thumbnails for the *whole* clip into a
+    # single sprite sheet, cached on disk and in memory; storyboard_frame()
+    # then just crops the nearest cell out of it - no subprocess involved
+    # once the sprite exists.
+
+    def _board_key(self, path: str, cols: int, rows: int, cell_w: int) -> str:
+        try:
+            st = os.stat(path)
+            stamp = f"{st.st_mtime_ns}:{st.st_size}"
+        except OSError:
+            stamp = "0"
+        raw = f"board|{os.path.normcase(path)}|{stamp}|{cols}x{rows}|{cell_w}"
+        return hashlib.md5(raw.encode("utf-8")).hexdigest() + ".jpg"
+
+    def storyboard(self, path: str, duration: float, cols: int = BOARD_COLS,
+                    rows: int = BOARD_ROWS, cell_w: int = BOARD_CELL_W):
+        """A PIL Image sprite sheet: cols x rows evenly-spaced thumbnails
+        covering the whole clip. None if the file/duration isn't usable."""
+        if not path or duration <= 0:
+            return None
+        key = self._board_key(path, cols, rows, cell_w)
+        with self._sprites_lock:
+            hit = self._sprites.get(key)
+            if hit is not None:
+                self._sprites.move_to_end(key)
+                return hit
+        if not os.path.exists(path):
+            return None
+
+        cached = os.path.join(self.root, key) if self.root else None
+        image = None
+        if cached and os.path.exists(cached):
+            try:
+                image = Image.open(cached)
+                image.load()
+            except Exception:
+                image = None
+
+        if image is None:
+            n = cols * rows
+            interval = max(duration / n, 0.1)
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+            os.close(tmp_fd)
+            try:
+                vf = (f"fps=1/{interval:.4f},scale={cell_w}:-2:flags=bicubic,"
+                      f"tile={cols}x{rows}")
+                cmd = ["ffmpeg", "-y", "-i", path, "-frames:v", "1",
+                       "-vf", vf, "-q:v", "4", tmp_path]
+                try:
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, timeout=30,
+                                   creationflags=NO_WINDOW)
+                except (OSError, subprocess.SubprocessError):
+                    return None
+                if not (os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0):
+                    return None
+                try:
+                    image = Image.open(tmp_path)
+                    image.load()
+                except Exception:
+                    return None
+                if cached:
+                    try:
+                        image.save(cached, "JPEG", quality=82)
+                    except OSError:
+                        pass
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        with self._sprites_lock:
+            self._sprites[key] = image
+            self._sprites.move_to_end(key)
+            while len(self._sprites) > self._SPRITE_LIMIT:
+                self._sprites.popitem(last=False)
+        return image
+
+    def storyboard_frame(self, path: str, duration: float, frac: float,
+                          cols: int = BOARD_COLS, rows: int = BOARD_ROWS,
+                          cell_w: int = BOARD_CELL_W) -> bytes | None:
+        """JPEG bytes for the storyboard cell nearest `frac` (0..1) into
+        the clip - an in-memory crop once the sprite is cached, so repeat
+        hovers over the same clip cost nothing but that crop."""
+        sprite = self.storyboard(path, duration, cols, rows, cell_w)
+        if sprite is None:
+            return None
+        n = cols * rows
+        index = max(0, min(int(max(0.0, min(frac, 1.0)) * n), n - 1))
+        cw = sprite.width // cols
+        ch = sprite.height // rows
+        cx, cy = index % cols, index // cols
+        box = (cx * cw, cy * ch, (cx + 1) * cw, (cy + 1) * ch)
+        try:
+            cell = sprite.crop(box)
+            buf = io.BytesIO()
+            cell.convert("RGB").save(buf, format="JPEG", quality=85)
+            return buf.getvalue()
+        except Exception:
+            return None
 
     def _store(self, dest: str, data: bytes) -> None:
         try:

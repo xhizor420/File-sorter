@@ -399,6 +399,8 @@ class ScrubPreview(ctk.CTkFrame):
         self.peek = PeekWindow(self)
         self._ghost_after = None
         self._ghost_token = 0
+        self._ghost_busy = False
+        self._ghost_pending = None
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
@@ -881,19 +883,43 @@ class ScrubPreview(ctk.CTkFrame):
     def _ghost_fetch(self, x: int, x_root: int, y_root: int) -> None:
         self._ghost_after = None
         path = self._current_path()
-        if not path or self._dragging or not self._duration():
+        duration = self._duration()
+        if not path or self._dragging or not duration:
             return
         moment = self._time_at(x)
         self._ghost_token += 1
         token = self._ghost_token
+        request = (path, duration, moment, token, x_root, y_root)
+        if self._ghost_busy:
+            # One extraction in flight at a time - only the latest hover
+            # position matters, so it replaces whatever was pending
+            # instead of piling up overlapping ffmpeg calls.
+            self._ghost_pending = request
+            return
+        self._ghost_busy = True
+        self._ghost_run(request)
+
+    def _ghost_run(self, request) -> None:
+        path, duration, moment, token, x_root, y_root = request
+        frac = moment / duration
 
         def work():
-            data = self.cache.frame(path, moment, self.peek.W)
-            if token != self._ghost_token:
-                return
-            self.after(0, lambda: self._ghost_show(data, moment, token, x_root, y_root))
+            # A pre-built sprite sheet crop instead of an ffmpeg spawn per
+            # hover - see ThumbCache.storyboard_frame() in media.py.
+            data = self.cache.storyboard_frame(path, duration, frac)
+            self.after(0, lambda: self._ghost_done(data, moment, token, x_root, y_root))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _ghost_done(self, data, moment, token, x_root, y_root) -> None:
+        self._ghost_busy = False
+        if token == self._ghost_token:
+            self._ghost_show(data, moment, token, x_root, y_root)
+        pending = self._ghost_pending
+        self._ghost_pending = None
+        if pending is not None:
+            self._ghost_busy = True
+            self._ghost_run(pending)
 
     def _ghost_show(self, data, moment, token, x_root, y_root) -> None:
         if token != self._ghost_token or self._dragging:
@@ -905,6 +931,7 @@ class ScrubPreview(ctk.CTkFrame):
 
     def _ghost_hide(self) -> None:
         self._ghost_token += 1
+        self._ghost_pending = None
         if self._ghost_after is not None:
             try:
                 self.after_cancel(self._ghost_after)

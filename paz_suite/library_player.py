@@ -352,10 +352,17 @@ class InlinePlayer:
         self._peek_run(request)
 
     def _peek_run(self, request) -> None:
-        rec, moment, token, x_root, y_root = request
+        _rec, moment, token, x_root, y_root = request
+        # Whichever file is actually loaded (original or the 4K/60 pool
+        # copy) - so the hover preview matches what Play would show.
+        path = self.engine.path
+        duration = self.engine.duration
+        frac = (moment / duration) if duration else 0.0
 
         def work():
-            data = self.tab.frames.frame(rec.path, moment, self.tab.peek.W)
+            # storyboard_frame() crops a pre-built sprite sheet instead of
+            # spawning ffmpeg per hover - see media.py for why.
+            data = self.tab.frames.storyboard_frame(path, duration, frac)
             self.bar.after(0, lambda: self._peek_done(data, moment, token, x_root, y_root))
 
         threading.Thread(target=work, daemon=True).start()
