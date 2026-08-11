@@ -345,11 +345,20 @@ class ClipPlayer:
         # delete("all") + create_image approach) is the single biggest cost
         # in this loop at 60fps - Tk has to re-register a whole new image
         # each time. Painting into one persistent PhotoImage via .paste()
-        # and reusing one canvas item is dramatically cheaper, and is what
-        # actually makes 60fps playback keep up instead of falling behind.
-        if (self._photo is None or self._canvas_item is None
-                or self._photo.width() != self.view_w
-                or self._photo.height() != self.view_h):
+        # and reusing one canvas item is dramatically cheaper. But callers
+        # (the idle thumbnail, a paused scrub frame) draw on this same
+        # canvas and call delete("all") directly without knowing about our
+        # cached item - canvas.type() is the one way to actually ask Tk
+        # "does this item still exist", rather than trusting our own flag
+        # and silently painting into an image nothing on screen points to
+        # anymore (which is exactly what made playback look frozen after
+        # the first clip: every clip after that kept "playing" into an
+        # orphaned image while the canvas still showed the old thumbnail).
+        stale = (self._photo is None or self._canvas_item is None
+                 or self._photo.width() != self.view_w
+                 or self._photo.height() != self.view_h
+                 or self.canvas.type(self._canvas_item) != "image")
+        if stale:
             self._photo = ImageTk.PhotoImage(image)
             self.canvas.delete("all")
             self._canvas_item = self.canvas.create_image(
