@@ -278,9 +278,12 @@ class ThumbCache:
     # be confused with cfg.filmstrip_frames / ScrubPreview's own filmstrip,
     # the row of individual thumbnails under Convert's timeline - this is
     # a separate, invisible sprite sheet purely for instant hover preview.
+    # Cell width has to be at least as wide as the preview bubble it feeds
+    # (PeekWindow.W = 380): a cell narrower than the bubble can only ever
+    # be shown small, since fitting an image to a box never enlarges it.
     BOARD_COLS = 6
     BOARD_ROWS = 5
-    BOARD_CELL_W = 160
+    BOARD_CELL_W = 384
 
     def __init__(self, limit: int = 30000, subdir: str = "paz_frames"):
         self.root = os.path.join(tempfile.gettempdir(), subdir)
@@ -291,12 +294,17 @@ class ThumbCache:
             os.makedirs(self.root, exist_ok=True)
         except OSError:
             self.root = ""
-        # A handful of decoded sprite sheets kept in memory - hovering
-        # back and forth over the *same* clip (the common case) then
-        # costs nothing but a PIL crop, not even a disk read.
+        # A few decoded sprite sheets kept in memory - hovering back and
+        # forth over the *same* clip (the common case) then costs nothing
+        # but a PIL crop, not even a disk read. Kept small deliberately:
+        # each sheet is ~2300x1080 RGB, so this is tens of MB, not a
+        # handful of KB.
         self._sprites: "OrderedDict[str, Image.Image]" = OrderedDict()
         self._sprites_lock = threading.Lock()
-        self._SPRITE_LIMIT = 12
+        self._SPRITE_LIMIT = 4
+        # Paths whose sheet is being built right now, so a burst of hovers
+        # over one clip kicks off exactly one build.
+        self._building: set = set()
 
     def _key(self, path: str, pos: float, width: int) -> str:
         try:
@@ -365,7 +373,7 @@ class ThumbCache:
     # it's indexing into a pre-built storyboard image, not re-decoding the
     # source on every hover. storyboard() does the same thing: one ffmpeg
     # pass tiles evenly-spaced thumbnails for the *whole* clip into a
-    # single sprite sheet, cached on disk and in memory; storyboard_frame()
+    # single sprite sheet, cached on disk and in memory; hover_frame()
     # then just crops the nearest cell out of it - no subprocess involved
     # once the sprite exists.
 
@@ -378,93 +386,148 @@ class ThumbCache:
         raw = f"board|{os.path.normcase(path)}|{stamp}|{cols}x{rows}|{cell_w}"
         return hashlib.md5(raw.encode("utf-8")).hexdigest() + ".jpg"
 
-    def storyboard(self, path: str, duration: float, cols: int = BOARD_COLS,
-                    rows: int = BOARD_ROWS, cell_w: int = BOARD_CELL_W):
-        """A PIL Image sprite sheet: cols x rows evenly-spaced thumbnails
-        covering the whole clip. None if the file/duration isn't usable."""
-        if not path or duration <= 0:
-            return None
+    def _board_cached(self, path: str, cols: int, rows: int, cell_w: int):
+        """The sheet if it's already in memory or on disk. Never runs
+        ffmpeg, so it's safe to call on the hover path."""
         key = self._board_key(path, cols, rows, cell_w)
         with self._sprites_lock:
             hit = self._sprites.get(key)
             if hit is not None:
                 self._sprites.move_to_end(key)
                 return hit
-        if not os.path.exists(path):
-            return None
-
         cached = os.path.join(self.root, key) if self.root else None
-        image = None
-        if cached and os.path.exists(cached):
-            try:
-                image = Image.open(cached)
-                image.load()
-            except Exception:
-                image = None
+        if not (cached and os.path.exists(cached)):
+            return None
+        try:
+            image = Image.open(cached)
+            image.load()
+        except Exception:
+            return None
+        self._board_remember(key, image)
+        return image
 
-        if image is None:
-            n = cols * rows
-            interval = max(duration / n, 0.1)
-            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
-            os.close(tmp_fd)
-            try:
-                vf = (f"fps=1/{interval:.4f},scale={cell_w}:-2:flags=bicubic,"
-                      f"tile={cols}x{rows}")
-                cmd = ["ffmpeg", "-y", "-i", path, "-frames:v", "1",
-                       "-vf", vf, "-q:v", "4", tmp_path]
-                try:
-                    subprocess.run(cmd, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.DEVNULL, timeout=30,
-                                   creationflags=NO_WINDOW)
-                except (OSError, subprocess.SubprocessError):
-                    return None
-                if not (os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0):
-                    return None
-                try:
-                    image = Image.open(tmp_path)
-                    image.load()
-                except Exception:
-                    return None
-                if cached:
-                    try:
-                        image.save(cached, "JPEG", quality=82)
-                    except OSError:
-                        pass
-            finally:
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
-
+    def _board_remember(self, key: str, image) -> None:
         with self._sprites_lock:
             self._sprites[key] = image
             self._sprites.move_to_end(key)
             while len(self._sprites) > self._SPRITE_LIMIT:
                 self._sprites.popitem(last=False)
+
+    def storyboard(self, path: str, duration: float, cols: int = BOARD_COLS,
+                    rows: int = BOARD_ROWS, cell_w: int = BOARD_CELL_W):
+        """Build (or fetch) the sprite sheet. Blocking - the ffmpeg pass
+        can take a while on a long 4K clip, so hover paths should go
+        through hover_frame() instead of calling this directly."""
+        if not path or duration <= 0:
+            return None
+        hit = self._board_cached(path, cols, rows, cell_w)
+        if hit is not None:
+            return hit
+        if not os.path.exists(path):
+            return None
+
+        key = self._board_key(path, cols, rows, cell_w)
+        cached = os.path.join(self.root, key) if self.root else None
+        n = cols * rows
+        interval = max(duration / n, 0.1)
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jpg")
+        os.close(tmp_fd)
+        try:
+            vf = (f"fps=1/{interval:.4f},scale={cell_w}:-2:flags=bilinear,"
+                  f"tile={cols}x{rows}")
+            # -skip_frame nokey decodes only keyframes. Without it this is
+            # a full decode of the entire file just to sample 30 frames,
+            # which on a long 4K60 clip takes many seconds - that stall is
+            # what made the first hover on a clip look like hovering was
+            # simply broken. The fps filter still picks by timestamp, so
+            # the cells stay evenly spaced across the clip; they just land
+            # on the nearest keyframe, which is invisible at thumbnail
+            # size and orders of magnitude cheaper.
+            cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                   "-skip_frame", "nokey", "-i", path,
+                   "-an", "-sn", "-frames:v", "1",
+                   "-vf", vf, "-q:v", "4", tmp_path]
+            try:
+                subprocess.run(cmd, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=90,
+                               creationflags=NO_WINDOW)
+            except (OSError, subprocess.SubprocessError):
+                return None
+            if not (os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0):
+                return None
+            try:
+                image = Image.open(tmp_path)
+                image.load()
+            except Exception:
+                return None
+            if cached:
+                try:
+                    image.save(cached, "JPEG", quality=82)
+                except OSError:
+                    pass
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+        self._board_remember(key, image)
         return image
 
-    def storyboard_frame(self, path: str, duration: float, frac: float,
-                          cols: int = BOARD_COLS, rows: int = BOARD_ROWS,
-                          cell_w: int = BOARD_CELL_W) -> bytes | None:
-        """JPEG bytes for the storyboard cell nearest `frac` (0..1) into
-        the clip - an in-memory crop once the sprite is cached, so repeat
-        hovers over the same clip cost nothing but that crop."""
-        sprite = self.storyboard(path, duration, cols, rows, cell_w)
-        if sprite is None:
-            return None
+    def _board_crop(self, sheet, frac: float, cols: int, rows: int) -> bytes | None:
         n = cols * rows
         index = max(0, min(int(max(0.0, min(frac, 1.0)) * n), n - 1))
-        cw = sprite.width // cols
-        ch = sprite.height // rows
+        cw = sheet.width // cols
+        ch = sheet.height // rows
         cx, cy = index % cols, index // cols
         box = (cx * cw, cy * ch, (cx + 1) * cw, (cy + 1) * ch)
         try:
-            cell = sprite.crop(box)
+            cell = sheet.crop(box)
             buf = io.BytesIO()
             cell.convert("RGB").save(buf, format="JPEG", quality=85)
             return buf.getvalue()
         except Exception:
             return None
+
+    def hover_frame(self, path: str, duration: float, frac: float,
+                     cols: int = BOARD_COLS, rows: int = BOARD_ROWS,
+                     cell_w: int = BOARD_CELL_W) -> bytes | None:
+        """The hover-scrub entry point: JPEG bytes for the moment `frac`
+        (0..1) into the clip, as fast as possible.
+
+        Once this clip's sheet exists, that's a pure in-memory crop. Until
+        then, waiting on the sheet would stall the very first hover on
+        every clip, so this falls back to one quick single-frame seek
+        (fast - `-ss` before `-i` lands on a keyframe without decoding
+        what came before) and builds the sheet in the background so every
+        later hover on the same clip is instant.
+        """
+        if not path or duration <= 0:
+            return None
+        sheet = self._board_cached(path, cols, rows, cell_w)
+        if sheet is not None:
+            return self._board_crop(sheet, frac, cols, rows)
+        self._board_build_async(path, duration, cols, rows, cell_w)
+        return self.frame(path, max(0.0, min(frac, 1.0)) * duration, cell_w)
+
+    def _board_build_async(self, path: str, duration: float,
+                            cols: int, rows: int, cell_w: int) -> None:
+        """Build this clip's sheet once, off to the side. A burst of
+        hovers over one clip must not start a burst of ffmpeg passes."""
+        key = self._board_key(path, cols, rows, cell_w)
+        with self._sprites_lock:
+            if key in self._building:
+                return
+            self._building.add(key)
+
+        def work():
+            try:
+                self.storyboard(path, duration, cols, rows, cell_w)
+            finally:
+                with self._sprites_lock:
+                    self._building.discard(key)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _store(self, dest: str, data: bytes) -> None:
         try:

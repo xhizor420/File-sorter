@@ -433,7 +433,7 @@ class ScrubPreview(ctk.CTkFrame):
         self._volume_job = None
 
         self.timeline = tk.Canvas(self, bg=T.SURFACE, highlightthickness=0,
-                                   borderwidth=0, height=26, cursor="sb_h_double_arrow")
+                                   borderwidth=0, height=26, cursor="hand2")
         self.timeline.grid(row=1, column=0, sticky="ew", padx=14)
         self.timeline.bind("<Configure>", lambda e: self._draw_timeline())
         self.timeline.bind("<Button-1>", self._on_press)
@@ -905,8 +905,8 @@ class ScrubPreview(ctk.CTkFrame):
 
         def work():
             # A pre-built sprite sheet crop instead of an ffmpeg spawn per
-            # hover - see ThumbCache.storyboard_frame() in media.py.
-            data = self.cache.storyboard_frame(path, duration, frac)
+            # hover - see ThumbCache.hover_frame() in media.py.
+            data = self.cache.hover_frame(path, duration, frac)
             self.after(0, lambda: self._ghost_done(data, moment, token, x_root, y_root))
 
         threading.Thread(target=work, daemon=True).start()

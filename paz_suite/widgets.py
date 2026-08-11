@@ -161,7 +161,15 @@ class PeekWindow:
         if data:
             try:
                 image = Image.open(io.BytesIO(data))
-                image.thumbnail((self.W, self.H), Image.LANCZOS)
+                # thumbnail() only ever shrinks, so a frame smaller than
+                # the bubble used to sit marooned in the middle of it at
+                # its own tiny size. Fit to the box in both directions.
+                scale = min(self.W / max(image.width, 1),
+                            self.H / max(image.height, 1))
+                if abs(scale - 1.0) > 0.01:
+                    image = image.resize(
+                        (max(int(image.width * scale), 1),
+                         max(int(image.height * scale), 1)), Image.LANCZOS)
                 self._img = ImageTk.PhotoImage(image)
                 self.canvas.create_image(self.W // 2, self.H // 2,
                                           image=self._img, anchor="center")

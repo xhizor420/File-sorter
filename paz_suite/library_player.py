@@ -53,7 +53,7 @@ class InlinePlayer:
 
         self.bar = tk.Canvas(self.frame, height=20, bg=T.SURFACE,
                               highlightthickness=0, bd=0,
-                              cursor="sb_h_double_arrow", width=self.VIEW_W)
+                              cursor="hand2", width=self.VIEW_W)
         self.bar.pack(fill="x", pady=(4, 2))
         self.bar.bind("<Configure>", lambda e: self._draw_bar())
         self.bar.bind("<Button-1>", self._bar_press)
@@ -360,9 +360,9 @@ class InlinePlayer:
         frac = (moment / duration) if duration else 0.0
 
         def work():
-            # storyboard_frame() crops a pre-built sprite sheet instead of
+            # hover_frame() crops a pre-built sprite sheet instead of
             # spawning ffmpeg per hover - see media.py for why.
-            data = self.tab.frames.storyboard_frame(path, duration, frac)
+            data = self.tab.frames.hover_frame(path, duration, frac)
             self.bar.after(0, lambda: self._peek_done(data, moment, token, x_root, y_root))
 
         threading.Thread(target=work, daemon=True).start()

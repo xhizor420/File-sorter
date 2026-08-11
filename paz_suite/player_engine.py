@@ -6,6 +6,18 @@ the same position (not frame-accurate lip sync, but real sound instead of
 none). A bounded queue keeps memory flat: when paused, ffmpeg blocks on its
 own pipe and simply waits.
 
+Playback is paced against the wall clock, not by adding a fixed delay after
+each frame. Tk's after() guarantees only a *minimum* delay, and decoding
+plus blitting a frame is far from free, so "wait 16ms, draw, repeat" ends
+up spending 16ms + however long the work took on every single frame - the
+video falls a little further behind real time with each one, which is
+exactly what made playback drift away from its own audio and look fine for
+a moment before visibly breaking up. Instead every frame gets an absolute
+deadline measured from when playback started, and when the display can't
+keep up frames are dropped to stay on that timeline rather than played
+late. Smooth and in sync beats every-frame-but-drifting, especially at
+60fps where the per-frame budget is only ~16ms to begin with.
+
 This module owns none of the surrounding UI (buttons, seek bar, clock) —
 callers wire it up via small callbacks (`on_tick`, `on_state`, `on_fail`,
 `on_eof`) and read `.playing` / `.position` / `.duration` as needed. That
@@ -20,6 +32,7 @@ import os
 import queue
 import subprocess
 import threading
+import time
 
 from PIL import Image, ImageTk
 
@@ -30,6 +43,19 @@ HAS_FFPLAY = has_ffplay()
 
 
 class ClipPlayer:
+
+    # How much decoded video to keep buffered ahead. Half a second absorbs
+    # a slow disk read or a scheduler hiccup without starving the display;
+    # the byte cap keeps that from turning into hundreds of megabytes when
+    # the player is stretched across a 4K screen.
+    QUEUE_SECONDS = 0.5
+    QUEUE_BYTES_CAP = 48 * 1024 * 1024
+    # Never blit more than this many frames' worth of catch-up in one tick -
+    # a long stall shouldn't turn into a visible fast-forward burst.
+    MAX_CATCHUP = 8
+    # Give up only after a genuinely long silence from the decoder. Opening
+    # a large 4K file can take a moment before the first frame lands.
+    STARVE_TIMEOUT = 8.0
 
     def __init__(self, canvas, width: int, height: int,
                  on_tick=None, on_state=None, on_fail=None, on_eof=None):
@@ -56,12 +82,16 @@ class ClipPlayer:
         self.proc = None
         self.audio_proc = None
         self._token = 0
-        self._queue: queue.Queue = queue.Queue(maxsize=6)
+        self._queue: queue.Queue = queue.Queue(maxsize=8)
         self._after = None
         self._photo = None
         self._canvas_item = None
-        self._waited = 0
         self._decoded = 0
+        # wall-clock pacing
+        self._clock_t0 = 0.0        # monotonic time this playback run started
+        self._clock_pos = 0.0       # source position that _clock_t0 corresponds to
+        self._frames_shown = 0      # frames consumed since _clock_t0 (incl. dropped)
+        self._starved_at = 0.0      # when the queue first came up empty
 
     # ── content ──────────────────────────────────────────────────────────
 
@@ -112,7 +142,7 @@ class ClipPlayer:
         self.playing = True
         if self.on_state:
             self.on_state(True)
-        self._waited = 0
+        self._start_clock(self.position)
         self._schedule()
 
     def pause(self) -> None:
@@ -144,11 +174,19 @@ class ClipPlayer:
         limit = max(self.duration - 0.1, 0.0) if self.duration else seconds
         self.position = max(0.0, min(seconds, limit))
         was_playing = self.playing
-        self._spawn(self.position)
+        self._cancel_tick()
+        # Seeking while paused used to start the audio process anyway (and
+        # never draw anything), so scrubbing a paused clip played sound at
+        # a frozen picture. Decode without audio and show the frame we
+        # landed on instead.
+        if self._spawn(self.position, with_audio=was_playing) is False:
+            return
+        self._start_clock(self.position)
         if was_playing:
             self.playing = True
-            self._cancel_tick()
             self._schedule()
+        else:
+            self._preview_frame(self._token)
 
     def toggle_mute(self) -> bool:
         self.muted = not self.muted
@@ -169,17 +207,32 @@ class ClipPlayer:
 
     # ── decoding ────────────────────────────────────────────────────────
 
-    def _spawn(self, position: float):
+    def _queue_size(self, rate: float) -> int:
+        """Frames to buffer ahead: ~QUEUE_SECONDS worth, but never more
+        than QUEUE_BYTES_CAP of raw RGB."""
+        by_time = int(rate * self.QUEUE_SECONDS)
+        by_bytes = int(self.QUEUE_BYTES_CAP / max(self.frame_bytes, 1))
+        return max(4, min(by_time, by_bytes, 90))
+
+    def _spawn(self, position: float, with_audio: bool = True):
         self._kill()
-        self._spawn_audio(position)
+        if with_audio:
+            self._spawn_audio(position)
         self._token += 1
         token = self._token
-        self._queue = queue.Queue(maxsize=6)
         # The whole point of the pool is 4K/60 - capping decode below the
         # source rate here was making 60fps footage play back at half its
         # actual smoothness. self.fps is already clamped to 60 in load().
         rate = max(min(self.fps, 60.0), 1.0)
         self.stream_fps = rate
+        # Captured in the reader's closure rather than read back off self:
+        # a re-spawn (any seek, or the loop restart) swaps self._queue, and
+        # a reader from the previous run that was mid-put would otherwise
+        # drop a stale frame into the *new* queue - frames from the old
+        # position leaking into the new one, which is what made seeking
+        # look like it froze or jumped.
+        frame_queue: queue.Queue = queue.Queue(maxsize=self._queue_size(rate))
+        self._queue = frame_queue
         vf = (f"scale={self.view_w}:{self.view_h}:"
               f"force_original_aspect_ratio=decrease,"
               f"pad={self.view_w}:{self.view_h}:(ow-iw)/2:(oh-ih)/2,"
@@ -213,7 +266,7 @@ class ClipPlayer:
                     frames += 1
                     while alive():
                         try:
-                            self._queue.put(chunk, timeout=0.2)
+                            frame_queue.put(chunk, timeout=0.2)
                             break
                         except queue.Full:
                             continue
@@ -221,9 +274,11 @@ class ClipPlayer:
                 pass
             finally:
                 if alive():
+                    # Set before the sentinel: _tick reads _decoded the
+                    # moment it sees None, so writing it after would race.
+                    self._decoded = frames
                     try:
-                        self._queue.put(None, timeout=0.5)
-                        self._decoded = frames
+                        frame_queue.put(None, timeout=0.5)
                     except queue.Full:
                         pass
 
@@ -292,49 +347,110 @@ class ClipPlayer:
                 pass
             self._after = None
 
+    # ── pacing ──────────────────────────────────────────────────────────
+
+    def _start_clock(self, position: float) -> None:
+        self._clock_t0 = time.monotonic()
+        self._clock_pos = position
+        self._frames_shown = 0
+        self._starved_at = 0.0
+
+    def _period(self) -> float:
+        """Wall-clock seconds between frames at the current speed."""
+        return 1.0 / max(self.stream_fps * self.speed, 1.0)
+
     def _schedule(self):
         if not self.playing:
             return
-        interval = int(1000 / max(self.stream_fps * self.speed, 1))
-        self._after = self.canvas.after(max(interval, 10), self._tick)
+        # Deadline for the *next* frame, measured from the start of this
+        # run - not "now + one frame", which is what accumulated drift.
+        target = self._clock_t0 + self._frames_shown * self._period()
+        delay_ms = int((target - time.monotonic()) * 1000)
+        self._after = self.canvas.after(max(delay_ms, 1), self._tick)
 
     def _tick(self):
         self._after = None
         if not self.playing:
             return
-        try:
-            chunk = self._queue.get_nowait()
-        except queue.Empty:
-            self._waited += 1
-            if self._waited > 400:
+        period = self._period()
+        now = time.monotonic()
+        # How many frames should already have been shown by now. If the
+        # display fell behind, pull (and discard) the stale ones so the
+        # frame we actually paint is the one that belongs on screen right
+        # now - the video stays locked to the audio instead of sliding.
+        due = int((now - self._clock_t0) / period) - self._frames_shown + 1
+        due = max(1, min(due, self.MAX_CATCHUP))
+
+        chunk = None
+        hit_eof = False
+        for _ in range(due):
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is None:
+                hit_eof = True
+                break
+            chunk = item
+            self._frames_shown += 1
+
+        if hit_eof:
+            self._handle_eof()
+            return
+
+        if chunk is None:
+            # Starved. Come back promptly rather than burning a whole frame
+            # period waiting - a full-period retry guarantees falling
+            # another frame behind every time the decoder stutters.
+            if not self._starved_at:
+                self._starved_at = now
+            elif now - self._starved_at > self.STARVE_TIMEOUT:
                 self._fail("Could not decode this file")
                 return
-            self._schedule()
+            self._after = self.canvas.after(4, self._tick)
             return
-        self._waited = 0
-        if chunk is None:
-            if self._decoded == 0:
-                self._fail("No video stream could be decoded from this file")
-                return
-            if self.loop and self.path is not None:
-                self.position = 0.0
-                self._spawn(0.0)
-                self._schedule()
-            else:
-                self.pause()
-                self.position = 0.0
-                if self.on_tick:
-                    self.on_tick(self.position)
-                if self.on_eof:
-                    self.on_eof()
-            return
+
+        self._starved_at = 0.0
         self._blit(chunk)
-        self.position += 1.0 / self.stream_fps
+        # Position comes from frames consumed, so dropping a frame advances
+        # the clock exactly as much as showing it would have.
+        self.position = self._clock_pos + self._frames_shown / self.stream_fps
         if self.duration and self.position > self.duration:
             self.position = self.duration
         if self.on_tick:
             self.on_tick(self.position)
         self._schedule()
+
+    def _handle_eof(self):
+        if self._decoded == 0:
+            self._fail("No video stream could be decoded from this file")
+            return
+        if self.loop and self.path is not None:
+            self.position = 0.0
+            self._spawn(0.0)
+            self._start_clock(0.0)
+            self._schedule()
+            return
+        self.pause()
+        self.position = 0.0
+        if self.on_tick:
+            self.on_tick(self.position)
+        if self.on_eof:
+            self.on_eof()
+
+    def _preview_frame(self, token: int, tries: int = 0) -> None:
+        """Paint the first frame of a paused seek once the decoder produces
+        it, so scrubbing a paused clip actually shows where you landed."""
+        if self.playing or token != self._token:
+            return
+        try:
+            item = self._queue.get_nowait()
+        except queue.Empty:
+            if tries < 150:
+                self.canvas.after(16, lambda: self._preview_frame(token, tries + 1))
+            return
+        if item is not None:
+            self._blit(item)
 
     def _blit(self, chunk: bytes):
         try:

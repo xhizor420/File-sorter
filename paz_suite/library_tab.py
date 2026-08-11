@@ -1348,7 +1348,7 @@ class LibraryTab(ctk.CTkFrame):
         frac = (moment / rec.duration) if rec.duration else 0.0
 
         def work():
-            # storyboard_frame() crops a pre-built sprite sheet instead of
+            # hover_frame() crops a pre-built sprite sheet instead of
             # spawning ffmpeg per hover - see media.py for why. The sprite
             # itself still needs one ffmpeg pass the first time a clip is
             # hovered, hence still doing this off the UI thread. Cell width
@@ -1356,7 +1356,7 @@ class LibraryTab(ctk.CTkFrame):
             # preview bubble 1:1 - keeping the sprite (and the handful kept
             # in memory) small matters more than a perfectly crisp hover
             # thumbnail here.
-            data = self.frames.storyboard_frame(rec.path, rec.duration, frac)
+            data = self.frames.hover_frame(rec.path, rec.duration, frac)
             self.ui(self._peek_done, rec, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()

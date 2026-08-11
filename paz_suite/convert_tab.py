@@ -472,8 +472,8 @@ class ConvertTab(ctk.CTkFrame):
 
         def work():
             # A pre-built sprite sheet crop instead of an ffmpeg spawn per
-            # hover - see ThumbCache.storyboard_frame() in media.py.
-            data = self.cache.storyboard_frame(path, duration, frac)
+            # hover - see ThumbCache.hover_frame() in media.py.
+            data = self.cache.hover_frame(path, duration, frac)
             self.ui(self._peek_done, task, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()
