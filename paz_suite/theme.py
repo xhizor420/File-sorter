@@ -27,6 +27,9 @@ class T:
     ACCENT3      = "#33D9A8"  # teal — Vault identity
     ACCENT3_HOV  = "#5CE6BC"
     ACCENT3_DEEP = "#123D33"
+    ACCENT4      = "#FFD600"  # saturated yellow — Beats identity
+    ACCENT4_HOV  = "#FFE666"
+    ACCENT4_DEEP = "#3D3300"
 
     # Colours cycled to auto-assign each new Vault project its own mark,
     # distinct from the pink/violet/teal tab identities above so a marked
@@ -144,4 +147,18 @@ VAULT_LABELS = {
     "tagline":  "used-clip tracker",
     "idle":     "Ready",
     "empty":    "Paste a list of post IDs or filenames above, then press Look up.",
+}
+
+BEATS_LABELS = {
+    "tagline":       "beat & downbeat detection",
+    "idle":          "Pick a clip, then Analyze",
+    "no_deps":       "PyTorch / beat-this aren't installed",
+    "extracting":    "Extracting audio",
+    "loading_model": "Loading model (first run downloads the checkpoint)",
+    "detecting":     "Detecting beats",
+    "done":          "Detected {b} beats · {d} downbeats · ~{bpm} BPM",
+    "cancelled":     "Cancelled",
+    "failed":        "Analysis failed - see log",
+    "exported":      "Exported 4 files to {path}",
+    "export_failed": "Export failed - see log",
 }

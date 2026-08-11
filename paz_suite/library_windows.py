@@ -127,6 +127,15 @@ class HelpWindow(ctk.CTkToplevel):
          "a matching 4K/60+ copy in the edit pool, playback defaults to "
          "that instead of the original - the 4K button next to Loop "
          "switches back and remembers your choice."),
+        ("Beats", "A separate tab for cutting to the beat: pick a clip (from "
+         "the library or any file), press Analyze, and it runs beat-this - "
+         "a real trained model, not a heuristic - to find its beat and "
+         "downbeat timestamps. Export writes four files for DaVinci "
+         "Resolve: a marker script (Workspace > Scripts, the safest option "
+         "since it references no media), a beatgrid XML timeline, an EDL "
+         "of markers, and a plain CSV. Needs PyTorch and beat-this "
+         "installed - the tab shows the exact pip command if they aren't; "
+         "every other tab is unaffected either way."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
          "e621 URL, artist or all tags. Ctrl+C copies the name, "
          "Ctrl+Shift+C the full path."),

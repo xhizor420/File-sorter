@@ -1,0 +1,14 @@
+# Optional dependencies for the Beats tab (neural beat/downbeat detection
+# via beat-this, https://github.com/CPJKU/beat_this, MIT licensed). Not
+# required by Convert/Library/Vault - those work identically, with zero
+# change to their install footprint, whether or not this file is installed.
+#
+# Install:
+#   pip install -r requirements-beats.txt
+#
+# CPU-only machines: the default torch wheel pulls a large CUDA build even
+# if you'll never use a GPU. Get the much smaller CPU-only wheel first:
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+#   pip install beat-this
+torch>=2.0
+beat-this

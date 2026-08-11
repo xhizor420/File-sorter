@@ -1,2 +1,5 @@
 customtkinter>=5.2
 Pillow>=10.0
+
+# Optional: the Beats tab needs torch + beat-this (large ML deps, not
+# required by Convert/Library/Vault) - see requirements-beats.txt.

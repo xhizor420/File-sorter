@@ -40,7 +40,8 @@ class SettingsWindow(ctk.CTkToplevel):
             segmented_button_unselected_hover_color=T.BTN_HOV,
             text_color=T.TEXT, corner_radius=12)
         tabs.grid(row=0, column=0, sticky="nsew", padx=14, pady=(14, 8))
-        for name in ("Convert Folders", "Encoding", "Sorting", "Library", "e621 & App"):
+        for name in ("Convert Folders", "Encoding", "Sorting", "Library", "Beats",
+                     "e621 & App"):
             tabs.add(name)
 
         self.fields = {}
@@ -48,10 +49,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._build_encoding(self._scrollable(tabs.tab("Encoding")))
         self._build_sorting(self._scrollable(tabs.tab("Sorting")))
         self._build_library(self._scrollable(tabs.tab("Library")))
+        self._build_beats(self._scrollable(tabs.tab("Beats")))
         self._build_app(self._scrollable(tabs.tab("e621 & App")))
         self._build_footer()
 
-        if initial_tab in ("Convert Folders", "Encoding", "Sorting", "Library", "e621 & App"):
+        if initial_tab in ("Convert Folders", "Encoding", "Sorting", "Library", "Beats",
+                           "e621 & App"):
             tabs.set(initial_tab)
 
     def _scrollable(self, tab):
@@ -332,6 +335,30 @@ class SettingsWindow(ctk.CTkToplevel):
         if library is not None:
             from .library_windows import FoldersWindow
             FoldersWindow(self, library)
+
+    def _build_beats(self, tab) -> None:
+        tab.grid_columnconfigure(1, weight=1)
+        self._section(tab, "Detection", 0)
+        self._switch(tab, 1, "beats_force_cpu", "Force CPU (skip GPU even if available)")
+        self._choice(tab, 2, "beats_checkpoint", "Checkpoint", ["final0", "small0"])
+        self._hint(tab, 3, "final0 is the full model (~78MB download, most "
+                          "accurate). small0 is a much smaller download "
+                          "(~8MB) and faster to run, at some cost to accuracy.")
+
+        self._section(tab, "Export", 4)
+        self._path_row(tab, 5, "beats_export_root", "Default export folder")
+        self._hint(tab, 6, "Leave blank to export next to the source clip "
+                          "each run instead of one shared folder.")
+
+        self._section(tab, "Setup", 7)
+        ctk.CTkLabel(
+            tab, wraplength=440, justify="left", font=font(11), text_color=T.DIM,
+            text=("The Beats tab needs PyTorch and beat-this installed - "
+                  "optional, since they're a large download most of the "
+                  "suite doesn't need. Open the Beats tab for the exact "
+                  "pip install command; every other tab works identically "
+                  "whether or not it's installed.")
+        ).grid(row=8, column=0, columnspan=3, sticky="w", padx=4, pady=(0, 4))
 
     def _build_app(self, tab) -> None:
         tab.grid_columnconfigure(1, weight=1)

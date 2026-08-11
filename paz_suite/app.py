@@ -19,9 +19,10 @@ from .widgets import Toaster, PeekWindow
 from .convert_tab import ConvertTab
 from .library_tab import LibraryTab
 from .vault_tab import VaultTab
+from .beats_tab import BeatsTab
 from .settings_window import SettingsWindow
 
-TAB_NAMES = ("Convert", "Library", "Vault")
+TAB_NAMES = ("Convert", "Library", "Vault", "Beats")
 
 
 class PazApp:
@@ -71,6 +72,9 @@ class PazApp:
         # Reads app.library.records to match a pasted list against the
         # index, so it must exist after Library has loaded its own.
         self.vault = VaultTab(self.tabview.tab("Vault"), self)
+        # Also reads app.library.records, for its "pick a clip from the
+        # library" picker.
+        self.beats = BeatsTab(self.tabview.tab("Beats"), self)
 
         if self.cfg.last_tab in TAB_NAMES:
             self.tabview.set(self.cfg.last_tab)
@@ -84,10 +88,10 @@ class PazApp:
     # ── header (shared identity, above the tab strip) ──────────────────────
     #
     # Each tab still draws its own small colour-coded brand block (pink for
-    # Convert, violet for Library, teal for Vault) so which mode you're in
-    # is obvious at a glance without reading the tab label - this bar is
-    # just the one piece of chrome no tab should have to own twice: the
-    # suite's own name.
+    # Convert, violet for Library, teal for Vault, yellow for Beats) so
+    # which mode you're in is obvious at a glance without reading the tab
+    # label - this bar is just the one piece of chrome no tab should have
+    # to own twice: the suite's own name.
 
     def _build_header(self) -> None:
         bar = ctk.CTkFrame(self.root, fg_color=T.SURFACE, corner_radius=0, height=40)
@@ -120,7 +124,8 @@ class PazApp:
     # same no matter which tab is showing.
     _TAB_ACCENTS = {"Convert": (T.ACCENT_DEEP, T.ACCENT),
                     "Library": (T.ACCENT2_DEEP, T.ACCENT2),
-                    "Vault":   (T.ACCENT3_DEEP, T.ACCENT3)}
+                    "Vault":   (T.ACCENT3_DEEP, T.ACCENT3),
+                    "Beats":   (T.ACCENT4_DEEP, T.ACCENT4)}
 
     def _style_tabs(self) -> None:
         active = self.tabview.get()
@@ -154,6 +159,7 @@ class PazApp:
         self.convert.after_settings_saved()
         self.library.after_settings_saved()
         self.vault.after_settings_saved()
+        self.beats.after_settings_saved()
 
     # ── keyboard dispatch ────────────────────────────────────────────────
     #
@@ -171,10 +177,15 @@ class PazApp:
         root = self.root
 
         # Every tab currently showing gets exactly one of these - not just
-        # Convert vs. "everything else", now that there are three tabs.
+        # Convert vs. "everything else", now that there are four tabs. F5's
+        # old trailing `else self.vault.key_lookup()` was an implicit "not
+        # Convert or Library" catch-all that predates Beats - harmless with
+        # three tabs, but would have silently fired Vault's lookup while
+        # Beats was the active tab. Every branch below is now explicit.
         root.bind("<Escape>", lambda e: (
             self.convert.key_stop() if self._active() == "Convert"
             else self.library.key_escape(e) if self._active() == "Library"
+            else self.beats.key_cancel(e) if self._active() == "Beats"
             else None))
         root.bind("<space>", lambda e: (
             self.convert.key_space(e) if self._active() == "Convert"
@@ -183,7 +194,8 @@ class PazApp:
         root.bind("<F5>", lambda e: (
             self.convert.key_scan() if self._active() == "Convert"
             else self.library.key_sync() if self._active() == "Library"
-            else self.vault.key_lookup()))
+            else self.vault.key_lookup() if self._active() == "Vault"
+            else self.beats.key_analyze()))
         root.bind("<Control-f>", lambda e: (
             self.convert.key_find_search() if self._active() == "Convert"
             else self.library.key_find_search(e) if self._active() == "Library"

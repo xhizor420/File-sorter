@@ -20,6 +20,11 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "paz_config.json")
 DB_PATH = os.path.join(CONFIG_DIR, "paz_library.sqlite3")
 THUMB_DIR = os.path.join(CONFIG_DIR, "paz_thumbs")
 E621_META_PATH = os.path.join(CONFIG_DIR, "e621_meta.json")
+# Beats tab: the beat-this checkpoint cache (set as TORCH_HOME) and the
+# extracted-audio WAV cache, kept under the same root as everything else
+# rather than the user's shared ~/.cache/torch.
+BEATS_MODEL_DIR = os.path.join(CONFIG_DIR, "paz_beats_models")
+BEATS_AUDIO_CACHE_DIR = os.path.join(CONFIG_DIR, "paz_beats_audio")
 
 # Legacy per-app files, from before the two tools were combined.
 _LEGACY_STUDIO_CONFIG = os.path.join(CONFIG_DIR, "config.json")
@@ -122,6 +127,14 @@ class AppConfig:
     # quietly stay current without ever re-checking the whole library
     # at once. 0 disables the ambient refresh (manual only).
     library_stale_refresh_budget: int = 40
+
+    # ── Beats: detection & export ────────────────────────────────────────
+    beats_force_cpu: bool = False      # skip CUDA even if torch reports it
+    beats_checkpoint: str = "final0"   # beat-this checkpoint: final0 (full,
+                                        # ~78MB) or small0 (faster, ~8MB)
+    beats_export_root: str = ""        # "" = auto per-clip folder next to
+                                        # the source file
+    beats_marker_set: str = "both"     # beats | downbeats | both
 
     # ── Performance (tune upward as the library grows) ──────────────────
     # In-memory ffprobe result cache, shared by both tabs. Each entry is a
