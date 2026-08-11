@@ -450,17 +450,34 @@ class LibraryTab(ctk.CTkFrame):
             self._restyle_cards()
             self._render_details()
 
-    PANEL_MIN, PANEL_MAX = 452, 1100
+    PANEL_MIN, PANEL_MAX = 452, 1500
+    # Theater always widens the panel (and with it the player - see
+    # _fit_panel) by at least this many pixels over whatever the normal
+    # width computed to, so the toggle can never land on the same value
+    # twice regardless of window size. A pure percentage-of-window share
+    # can't guarantee that: at some widths both the normal and theater
+    # shares round to the same PANEL_MIN/MAX clamp, and the button reads
+    # as doing nothing.
+    THEATER_BONUS = 240
 
     def panel_width(self) -> int:
         try:
+            # winfo_width() can be one geometry pass behind a change that
+            # just happened (e.g. the sidebar collapsing when theater
+            # turns on) - forcing pending layout through first keeps the
+            # two calls that matter here (this one, and the one theater
+            # makes right after) reading the same, current number.
+            self.root.update_idletasks()
             total = self.root.winfo_width()
         except tk.TclError:
             total = 1680
         if total < 400:
             total = 1680
-        share = 0.46 if self.cfg.theater else 0.30
-        return int(max(self.PANEL_MIN, min(total * share, self.PANEL_MAX)))
+        base = int(max(self.PANEL_MIN, min(total * 0.30, self.PANEL_MAX)))
+        if not self.cfg.theater:
+            return base
+        theater = max(base + self.THEATER_BONUS, int(total * 0.46))
+        return min(theater, self.PANEL_MAX)
 
     def _build_details(self):
         panel = ctk.CTkFrame(self, fg_color=T.BG, corner_radius=0, width=self.PANEL_MIN)

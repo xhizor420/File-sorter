@@ -205,9 +205,14 @@ class SettingsWindow(ctk.CTkToplevel):
                     ["ultrafast", "veryfast", "fast", "medium", "slow", "veryslow"])
 
         self._section(tab, "Frame rate for editing", 8)
-        self._hint(tab, 9, "58.5-59.99 fps sources are always resampled to "
-                          "exactly 60.00 (59.94 is just NTSC's way of saying "
-                          "60). Higher rates are never touched.")
+        self._hint(tab, 9, "This is real behavior, not just a label: sources "
+                          "reading 58.5 fps up to just under your Minimum fps "
+                          "(Sorting tab, 60 by default) are actually re-encoded "
+                          "at exactly that rate - 59.94 is NTSC's way of "
+                          "writing 60, off by a rounding hair, not a genuinely "
+                          "slower clip. The output file really is 60.000 fps, "
+                          "not 59.94 counted as close enough. Sources already "
+                          "at or above the target are left untouched.")
         self._switch(tab, 10, "force_cfr", "Force constant frame rate")
         self._switch(tab, 11, "edit_gop", "1-second keyframes (smooth scrubbing)")
         self._switch(tab, 12, "loop_short", "Loop very short clips")
@@ -233,20 +238,28 @@ class SettingsWindow(ctk.CTkToplevel):
             font=font(11), text_color=T.DIM, justify="left"
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=4, pady=(0, 8))
 
-        self._number(tab, 2, "min_height", "Minimum height", 240, 8192)
-        self._number(tab, 3, "min_fps", "Minimum fps", 1, 480)
-        self._hint(tab, 4, "59.94 always counts as 60 - see Encoding > Frame "
-                          "rate for editing. Otherwise the fps must meet this "
-                          "exactly.")
+        self._number(tab, 2, "min_height", "Minimum short side", 240, 8192)
+        self._hint(tab, 3, "Checked against whichever of width/height is "
+                          "smaller, not literally the height - a 2160-wide, "
+                          "3840-tall phone-orientation clip meets a 2160 "
+                          "threshold exactly like a 3840x2160 landscape one "
+                          "does.")
+        self._number(tab, 4, "min_fps", "Minimum fps", 1, 480)
+        self._hint(tab, 5, "58.5 up to just under this is resampled to exactly "
+                          "this value during conversion (see Encoding > Frame "
+                          "rate for editing) - a real re-encode, not a rule "
+                          "that just looks the other way. A source's fps must "
+                          "genuinely meet this number, resampled or native, to "
+                          "count as fast enough.")
 
-        self._section(tab, "Delivery", 5)
-        self._choice(tab, 6, "transfer_mode", "Move files by", ["copy", "move", "hardlink"])
-        self._hint(tab, 7, "Hardlink is instant and uses no extra space, but "
+        self._section(tab, "Delivery", 6)
+        self._choice(tab, 7, "transfer_mode", "Move files by", ["copy", "move", "hardlink"])
+        self._hint(tab, 8, "Hardlink is instant and uses no extra space, but "
                           "only within one drive.")
 
-        self._switch(tab, 8, "sort_enabled", "Sort after converting")
-        self._switch(tab, 9, "sort_existing", "Also sort outputs from earlier runs")
-        self._switch(tab, 10, "gap_check_enabled",
+        self._switch(tab, 9, "sort_enabled", "Sort after converting")
+        self._switch(tab, 10, "sort_existing", "Also sort outputs from earlier runs")
+        self._switch(tab, 11, "gap_check_enabled",
                     "Check for upscale gaps after Start (convert -> sort -> "
                     "double-check)")
 
@@ -280,9 +293,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self._number(tab, 7, "thumb_width", "Thumbnail width", 240, 960)
         self._hint(tab, 8, "Changing thumbnail width needs a full rebuild "
                           "(Ctrl+Shift+R) to take effect on existing clips.")
-        self._number(tab, 9, "card_width", "Gallery tile width", 120, 480)
-        self._hint(tab, 10, "How wide each card in the gallery grid is, in "
-                           "pixels. Takes effect immediately.")
+        self._number(tab, 9, "card_width", "Gallery tile width (target)", 120, 480)
+        self._hint(tab, 10, "A target, not an exact size: the gallery fits as "
+                           "many whole columns of at least this width as the "
+                           "window allows, then stretches them evenly to fill "
+                           "it - so the number you see may differ from what "
+                           "you typed. Takes effect immediately.")
 
         self._section(tab, "Player", 11)
         self._switch(tab, 12, "player_loop", "Loop clips by default")
