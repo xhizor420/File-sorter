@@ -138,6 +138,18 @@ already spent on a project.
   blur into one flat "used" indicator. Projects can be renamed or cleared
   entirely from either the Vault tab or a clip's right-click menu in
   Library.
+- **The Library player defaults to the 4K/60 copy, and actually plays it
+  at 60fps.** When a clip has a matching edit-pool copy, pressing Play now
+  plays that instead of the original by default - a **4K** button next to
+  Loop toggles back to the original and remembers your choice. The player
+  itself was also quietly capping every clip's playback to 30fps
+  regardless of source, which is why 60fps footage never looked as smooth
+  as it should have; it now decodes and displays at the real source rate,
+  and repaints the video frame in place instead of rebuilding it from
+  scratch every frame, which is also just faster across the board. The
+  gallery's and player's hover-scrub preview now runs at most one frame
+  extraction at a time instead of firing a new one on every mouse-move
+  tick, so it tracks the cursor instead of trailing behind it.
 
 Everything else is preserved: GPU/CPU encoding with automatic fallback,
 frame-rate snapping and CFR, watch mode, the duplicate finder, the

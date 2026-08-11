@@ -105,6 +105,10 @@ class AppConfig:
     player_loop: bool = True
     player_volume: int = 80
     player_muted: bool = False
+    # Prefer the matching 4K/60+ edit-pool copy over the indexed original
+    # when one exists - that's the point of the pool, so playback should
+    # default to it instead of the source file.
+    player_prefer_premium: bool = True
 
     # ── e621 lookup (shared cache, shared credentials) ──────────────────
     e621_enabled: bool = True

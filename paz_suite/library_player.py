@@ -20,7 +20,7 @@ from PIL import Image, ImageTk
 from .theme import T, font
 from .format import fmt_clock, fmt_len
 from .config import THUMB_DIR
-from .media import fit_frame, thumb_key
+from .media import fit_frame, thumb_key, probe
 from .player_engine import ClipPlayer, HAS_FFPLAY
 
 
@@ -35,6 +35,8 @@ class InlinePlayer:
         self._dragging = False
         self._peek_after = None
         self._peek_token = 0
+        self._peek_busy = False
+        self._peek_pending = None
 
         self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.canvas = tk.Canvas(self.frame, width=self.VIEW_W, height=self.VIEW_H,
@@ -76,6 +78,8 @@ class InlinePlayer:
         cbtn("+5s", lambda: self.nudge(5), 40)
         self.loop_btn = cbtn("Loop", self.toggle_loop, 48,
                               T.ACCENT if self.engine.loop else T.DIM)
+        self.quality_btn = cbtn("4K", self.toggle_quality, 46)
+        self.quality_btn.configure(state="disabled")
         self.speed_menu = ctk.CTkOptionMenu(
             controls, values=["0.5x", "1x", "1.5x", "2x"], width=64, height=26,
             font=font(10), corner_radius=6, fg_color=T.INPUT,
@@ -135,11 +139,53 @@ class InlinePlayer:
             self._show_idle_text("Select a clip")
             self.clock.configure(text="")
             self._draw_bar()
+            self._update_quality_btn()
             return
-        self.engine.load(rec.path, rec.duration, rec.fps or 30.0)
+        path, duration, fps = self._resolve_source(rec)
+        self.engine.load(path, duration, fps)
         self.clock.configure(text=f"0:00.0 / {fmt_len(self.engine.duration)}")
         self._draw_bar()
         self._show_thumb(rec)
+        self._update_quality_btn()
+
+    def _resolve_source(self, rec):
+        """(path, duration, fps) to actually load for `rec` - the matching
+        4K/60+ edit-pool copy when one exists and is preferred, else the
+        indexed file itself. The pool copy isn't in the DB (it lives in a
+        separate folder tree from the library scan), so its duration/fps
+        come from a probe - cheap after the first look since probe() caches
+        by path+mtime+size."""
+        if rec.premium_path and self.tab.cfg.player_prefer_premium:
+            info = probe(rec.premium_path)
+            if info and info.duration:
+                return rec.premium_path, info.duration, info.fps or 60.0
+        return rec.path, rec.duration, rec.fps or 30.0
+
+    def toggle_quality(self) -> None:
+        if self.rec is None or not self.rec.premium_path:
+            return
+        self.tab.cfg.player_prefer_premium = not self.tab.cfg.player_prefer_premium
+        self.tab.cfg.save()
+        was_playing = self.engine.playing
+        position = self.engine.position
+        path, duration, fps = self._resolve_source(self.rec)
+        self.engine.load(path, duration, fps)
+        self.engine.position = min(position, self.engine.duration) if self.engine.duration else 0.0
+        self._draw_bar()
+        self.clock.configure(
+            text=f"{fmt_clock(self.engine.position)} / {fmt_len(self.engine.duration)}")
+        if was_playing:
+            self.engine.play()
+        self._update_quality_btn()
+
+    def _update_quality_btn(self) -> None:
+        if self.rec is None or not self.rec.premium_path:
+            self.quality_btn.configure(state="disabled", text="4K", text_color=T.DIM)
+            return
+        prefer = self.tab.cfg.player_prefer_premium
+        self.quality_btn.configure(
+            state="normal", text="4K ✓" if prefer else "Original",
+            text_color=T.ACCENT if prefer else T.DIM)
 
     def _show_idle_text(self, text: str):
         self.canvas.delete("all")
@@ -293,14 +339,36 @@ class InlinePlayer:
         moment = frac * self.engine.duration
         self._peek_token += 1
         token = self._peek_token
+        request = (rec, moment, token, x_root, y_root)
+        if self._peek_busy:
+            # An extraction is already running - fast mouse movement used
+            # to spawn a new ffmpeg call per debounce tick regardless, so
+            # the preview fell further and further behind the cursor.
+            # Only the latest hover position matters, so it just replaces
+            # whatever was pending instead of queuing another call.
+            self._peek_pending = request
+            return
+        self._peek_busy = True
+        self._peek_run(request)
+
+    def _peek_run(self, request) -> None:
+        rec, moment, token, x_root, y_root = request
 
         def work():
             data = self.tab.frames.frame(rec.path, moment, self.tab.peek.W)
-            if token != self._peek_token:
-                return
-            self.bar.after(0, lambda: self._peek_show(data, moment, token, x_root, y_root))
+            self.bar.after(0, lambda: self._peek_done(data, moment, token, x_root, y_root))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _peek_done(self, data, moment: float, token: int, x_root: int, y_root: int) -> None:
+        self._peek_busy = False
+        if token == self._peek_token:
+            self._peek_show(data, moment, token, x_root, y_root)
+        pending = self._peek_pending
+        self._peek_pending = None
+        if pending is not None:
+            self._peek_busy = True
+            self._peek_run(pending)
 
     def _peek_show(self, data, moment: float, token: int, x_root: int, y_root: int) -> None:
         if token != self._peek_token or self.rec is None or self._dragging:
@@ -311,6 +379,7 @@ class InlinePlayer:
 
     def _peek_hide(self) -> None:
         self._peek_token += 1
+        self._peek_pending = None
         if self._peek_after is not None:
             try:
                 self.bar.after_cancel(self._peek_after)

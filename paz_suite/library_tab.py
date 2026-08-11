@@ -68,6 +68,8 @@ class LibraryTab(ctk.CTkFrame):
         self._peek_after = None
         self._peek_token = 0
         self._peek_path: str | None = None
+        self._peek_busy = False
+        self._peek_pending = None
         self._search_after = None
         self._resize_after = None
         self._columns = 0
@@ -762,7 +764,7 @@ class LibraryTab(ctk.CTkFrame):
                         try:
                             with os.scandir(sub) as entries:
                                 premium[name] = {
-                                    e.name for e in entries if e.is_file()
+                                    e.name: e.path for e in entries if e.is_file()
                                     and os.path.splitext(e.name)[1].lower() == ".mp4"}
                         except OSError:
                             pass
@@ -784,8 +786,9 @@ class LibraryTab(ctk.CTkFrame):
                 rec.url = meta.get("url") or ""
                 self.tag_universe |= rec.tags
                 rec.compute_named()
-            rec.premium = (rec.height >= 2000
-                           or rec.name in premium.get(rec.folder, ()))
+            alt_path = premium.get(rec.folder, {}).get(rec.name)
+            rec.premium = rec.height >= 2000 or alt_path is not None
+            rec.premium_path = alt_path or ""
             marks = vault_marks.get(rec.path)
             if marks:
                 rec.used_projects = [project for project, _color, _t in marks]
@@ -1330,14 +1333,35 @@ class LibraryTab(ctk.CTkFrame):
         moment = max(0.0, min(frac * rec.duration, rec.duration - 0.05))
         self._peek_token += 1
         token = self._peek_token
+        request = (rec, moment, token, x_root, y_root)
+        if self._peek_busy:
+            # One extraction in flight at a time - piling up an overlapping
+            # ffmpeg call per debounce tick on fast mouse movement is what
+            # made the preview lag behind the cursor. Only the latest hover
+            # position matters, so it replaces whatever was pending.
+            self._peek_pending = request
+            return
+        self._peek_busy = True
+        self._peek_run(request)
+
+    def _peek_run(self, request) -> None:
+        rec, moment, token, x_root, y_root = request
 
         def work():
             data = self.frames.frame(rec.path, moment, PeekWindow.W)
-            if token != self._peek_token:
-                return
-            self.ui(self._peek_show, rec, data, moment, token, x_root, y_root)
+            self.ui(self._peek_done, rec, data, moment, token, x_root, y_root)
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _peek_done(self, rec: Rec, data, moment, token, x_root, y_root) -> None:
+        self._peek_busy = False
+        if token == self._peek_token:
+            self._peek_show(rec, data, moment, token, x_root, y_root)
+        pending = self._peek_pending
+        self._peek_pending = None
+        if pending is not None:
+            self._peek_busy = True
+            self._peek_run(pending)
 
     def _peek_show(self, rec: Rec, data, moment, token, x_root, y_root):
         if token != self._peek_token or self._peek_path != rec.path:
@@ -1352,6 +1376,7 @@ class LibraryTab(ctk.CTkFrame):
     def _peek_hide(self):
         self._peek_path = None
         self._peek_token += 1
+        self._peek_pending = None
         if self._peek_after is not None:
             try:
                 self.after_cancel(self._peek_after)

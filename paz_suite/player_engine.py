@@ -59,6 +59,7 @@ class ClipPlayer:
         self._queue: queue.Queue = queue.Queue(maxsize=6)
         self._after = None
         self._photo = None
+        self._canvas_item = None
         self._waited = 0
         self._decoded = 0
 
@@ -77,6 +78,8 @@ class ClipPlayer:
         self.duration = 0.0
         self.position = 0.0
         self.canvas.delete("all")
+        self._photo = None
+        self._canvas_item = None
 
     def set_size(self, width: int, height: int) -> None:
         width = max(int(width) // 2 * 2, 240)
@@ -172,7 +175,10 @@ class ClipPlayer:
         self._token += 1
         token = self._token
         self._queue = queue.Queue(maxsize=6)
-        rate = max(min(self.fps, 30.0), 1.0)
+        # The whole point of the pool is 4K/60 - capping decode below the
+        # source rate here was making 60fps footage play back at half its
+        # actual smoothness. self.fps is already clamped to 60 in load().
+        rate = max(min(self.fps, 60.0), 1.0)
         self.stream_fps = rate
         vf = (f"scale={self.view_w}:{self.view_h}:"
               f"force_original_aspect_ratio=decrease,"
@@ -270,6 +276,8 @@ class ClipPlayer:
         if self.on_state:
             self.on_state(False)
         self.canvas.delete("all")
+        self._photo = None
+        self._canvas_item = None
         self.canvas.create_text(self.view_w // 2, self.view_h // 2,
                                 text=message, fill="#FF5C6E", font=("Segoe UI", 10),
                                 width=self.view_w - 40)
@@ -331,9 +339,21 @@ class ClipPlayer:
     def _blit(self, chunk: bytes):
         try:
             image = Image.frombytes("RGB", (self.view_w, self.view_h), chunk)
-            self._photo = ImageTk.PhotoImage(image)
         except Exception:
             return
-        self.canvas.delete("all")
-        self.canvas.create_image(self.view_w // 2, self.view_h // 2,
-                                 image=self._photo, anchor="center")
+        # Recreating the PhotoImage and canvas item every frame (the old
+        # delete("all") + create_image approach) is the single biggest cost
+        # in this loop at 60fps - Tk has to re-register a whole new image
+        # each time. Painting into one persistent PhotoImage via .paste()
+        # and reusing one canvas item is dramatically cheaper, and is what
+        # actually makes 60fps playback keep up instead of falling behind.
+        if (self._photo is None or self._canvas_item is None
+                or self._photo.width() != self.view_w
+                or self._photo.height() != self.view_h):
+            self._photo = ImageTk.PhotoImage(image)
+            self.canvas.delete("all")
+            self._canvas_item = self.canvas.create_image(
+                self.view_w // 2, self.view_h // 2,
+                image=self._photo, anchor="center")
+        else:
+            self._photo.paste(image)

@@ -123,7 +123,10 @@ class HelpWindow(ctk.CTkToplevel):
          "already been spent. The PROJECTS group in the sidebar lists every "
          "project; click one to jump straight to its clips."),
         ("Player", "Scales with the window; Theater mode (Ctrl+T) gives it "
-         "about half the window and collapses the tag rail."),
+         "about half the window and collapses the tag rail. When a clip has "
+         "a matching 4K/60+ copy in the edit pool, playback defaults to "
+         "that instead of the original - the 4K button next to Loop "
+         "switches back and remembers your choice."),
         ("Copying", "Right-click any clip > Copy for name, path, post ID, "
          "e621 URL, artist or all tags. Ctrl+C copies the name, "
          "Ctrl+Shift+C the full path."),

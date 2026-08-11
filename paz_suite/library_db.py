@@ -76,6 +76,11 @@ class Rec:
     tags: set = field(default_factory=set)
     url: str = ""
     premium: bool = False        # a 4K/60+ copy exists (or this IS 4K)
+    # Full path to that 4K/60+ copy under premium_root, when this record
+    # itself isn't already one - filled in at load time alongside premium,
+    # so the player can default playback to it. Empty when this record IS
+    # the premium copy (nothing to switch to) or none exists.
+    premium_path: str = ""
     # artist/character/species/copyright/lore names, union'd once at load
     # time instead of on every tag-panel and detail-panel render - the
     # difference is real once a library runs into five figures of clips.
