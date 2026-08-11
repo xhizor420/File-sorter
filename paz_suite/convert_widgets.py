@@ -592,6 +592,9 @@ class ScrubPreview(ctk.CTkFrame):
         if path:
             self.player_engine.load(path, duration, info.fps if info else 30.0)
             self.player_engine.position = self._pos
+            # Warm the hover-scrub sheet now rather than on first hover -
+            # by the time anyone drags the timeline it's usually ready.
+            self.cache.prime_hover(path, duration)
         self._update_meta()
         self._draw_timeline()
         self._request_frame(immediate=True)
@@ -748,11 +751,13 @@ class ScrubPreview(ctk.CTkFrame):
                 pass
             self._pending = None
         if immediate:
-            self._fetch_frame()
+            # The settled/final frame (a release, or the initial load) -
+            # worth the extra fallback attempts to make sure it lands.
+            self._fetch_frame(fast=False)
         else:
-            self._pending = self.after(90, self._fetch_frame)
+            self._pending = self.after(90, lambda: self._fetch_frame(fast=True))
 
-    def _fetch_frame(self) -> None:
+    def _fetch_frame(self, fast: bool = False) -> None:
         self._pending = None
         path = self._current_path()
         if not path:
@@ -763,7 +768,11 @@ class ScrubPreview(ctk.CTkFrame):
         width = max(self.view.winfo_width(), 320)
 
         def work():
-            data = self.cache.frame(path, pos, width)
+            # fast=True while actively dragging: one quick attempt, and if
+            # it misses this tick just shows nothing rather than blocking
+            # on the slower fallback attempts - the next drag tick will
+            # try again at wherever the mouse is by then anyway.
+            data = self.cache.frame(path, pos, width, fast=fast)
             if token != self._token:
                 return
             self.after(0, lambda: self._draw_frame(data, token))

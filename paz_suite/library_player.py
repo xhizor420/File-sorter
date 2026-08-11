@@ -37,6 +37,9 @@ class InlinePlayer:
         self._peek_token = 0
         self._peek_busy = False
         self._peek_pending = None
+        self._seek_job = None
+        self._pending_pos = None
+        self._last_seek_pos = None
 
         self.frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.canvas = tk.Canvas(self.frame, width=self.VIEW_W, height=self.VIEW_H,
@@ -57,7 +60,7 @@ class InlinePlayer:
         self.bar.pack(fill="x", pady=(4, 2))
         self.bar.bind("<Configure>", lambda e: self._draw_bar())
         self.bar.bind("<Button-1>", self._bar_press)
-        self.bar.bind("<B1-Motion>", self._bar_press)
+        self.bar.bind("<B1-Motion>", self._bar_drag)
         self.bar.bind("<ButtonRelease-1>", self._bar_release)
         self.bar.bind("<Motion>", self._bar_hover)
         self.bar.bind("<Leave>", self._bar_leave)
@@ -133,6 +136,7 @@ class InlinePlayer:
         """Selection changed: stop whatever is playing, show the new thumb."""
         self.engine.stop()
         self._peek_hide()
+        self._last_seek_pos = None
         self.rec = rec
         if rec is None:
             self.engine.clear()
@@ -147,6 +151,11 @@ class InlinePlayer:
         self._draw_bar()
         self._show_thumb(rec)
         self._update_quality_btn()
+        # Warm the hover-scrub sheet now, while the user is still just
+        # looking at the thumbnail - by the time they reach for the seek
+        # bar it's usually already built, instead of the first several
+        # seconds of scrubbing paying a slow per-hover fallback.
+        self.tab.frames.prime_hover(path, duration)
 
     def _resolve_source(self, rec):
         """(path, duration, fps) to actually load for `rec` - the matching
@@ -168,6 +177,7 @@ class InlinePlayer:
         self.tab.cfg.save()
         was_playing = self.engine.playing
         position = self.engine.position
+        self._last_seek_pos = None
         path, duration, fps = self._resolve_source(self.rec)
         self.engine.load(path, duration, fps)
         self.engine.position = min(position, self.engine.duration) if self.engine.duration else 0.0
@@ -177,6 +187,7 @@ class InlinePlayer:
         if was_playing:
             self.engine.play()
         self._update_quality_btn()
+        self.tab.frames.prime_hover(path, duration)
 
     def _update_quality_btn(self) -> None:
         if self.rec is None or not self.rec.premium_path:
@@ -301,17 +312,75 @@ class InlinePlayer:
             return
         self._peek_hide()
         self._dragging = True
-        width = max(self.bar.winfo_width() - 4, 1)
-        frac = max(0.0, min((event.x - 2) / width, 1.0))
-        self.engine.position = frac * self.engine.duration
-        self._draw_bar()
-        self.clock.configure(
-            text=f"{fmt_clock(self.engine.position)} / {fmt_len(self.engine.duration)}")
+        # Reset per gesture, not per clip: the dedup check in _commit_seek
+        # only exists to stop a plain click's own release from redundantly
+        # re-seeking the exact spot the press already landed on. Without
+        # clearing it here, that same guard would silently swallow a
+        # second, entirely separate click at that same position later -
+        # exactly the "ignores it until you click again" bug this whole
+        # rewrite exists to fix.
+        self._last_seek_pos = None
+        # A plain click used to only move the displayed position and wait
+        # for the release to actually seek - so a single click looked like
+        # it did nothing until you clicked again (whatever the second
+        # click's seek landed on was the first one you actually saw take
+        # effect). Seeking immediately on press is both more correct (a
+        # click IS a request to jump there) and removes that whole class
+        # of "why did I need to click twice" confusion.
+        self._scrub_to(event.x, commit=True)
+
+    def _bar_drag(self, event):
+        if not self._dragging:
+            return
+        self._scrub_to(event.x, commit=False)
 
     def _bar_release(self, _event):
-        if self._dragging:
-            self._dragging = False
-            self.engine.seek(self.engine.position)
+        if not self._dragging:
+            return
+        self._dragging = False
+        if self._seek_job is not None:
+            try:
+                self.bar.after_cancel(self._seek_job)
+            except ValueError:
+                pass
+            self._seek_job = None
+        # Land exactly where the mouse came up, even if the last throttled
+        # seek during the drag hadn't fired yet.
+        self._commit_seek(self._pending_pos)
+
+    def _scrub_to(self, x: int, commit: bool) -> None:
+        width = max(self.bar.winfo_width() - 4, 1)
+        frac = max(0.0, min((x - 2) / width, 1.0))
+        position = frac * self.engine.duration
+        self._pending_pos = position
+        # The bar and clock track the cursor on every event regardless of
+        # whether this tick actually reseeks - that's what makes dragging
+        # feel like it's tracking the mouse instead of catching up to it.
+        self.engine.position = position
+        self._draw_bar()
+        self.clock.configure(
+            text=f"{fmt_clock(position)} / {fmt_len(self.engine.duration)}")
+        if commit:
+            self._commit_seek(position)
+            return
+        # While dragging, the actual reseek (which respawns ffmpeg) is
+        # throttled rather than fired on every pixel of motion - a fast
+        # drag across the bar would otherwise spawn a process per pixel.
+        if self._seek_job is None:
+            self._seek_job = self.bar.after(70, self._flush_seek)
+
+    def _flush_seek(self) -> None:
+        self._seek_job = None
+        self._commit_seek(self._pending_pos)
+
+    def _commit_seek(self, position: float | None) -> None:
+        if position is None:
+            return
+        if (self._last_seek_pos is not None
+                and abs(position - self._last_seek_pos) < 0.01):
+            return
+        self._last_seek_pos = position
+        self.engine.seek(position)
 
     # ── hover preview (same YouTube-style scrub bubble as the gallery) ────
 

@@ -315,8 +315,15 @@ class ThumbCache:
         raw = f"{os.path.normcase(path)}|{stamp}|{pos:.2f}|{width}"
         return hashlib.md5(raw.encode("utf-8")).hexdigest() + ".jpg"
 
-    def frame(self, path: str, pos: float, width: int = 640) -> bytes | None:
-        """Return JPEG bytes for the frame at `pos` seconds, extracting if needed."""
+    def frame(self, path: str, pos: float, width: int = 640,
+              fast: bool = False) -> bytes | None:
+        """Return JPEG bytes for the frame at `pos` seconds, extracting if
+        needed. `fast=True` tries only the quick input-side seek (a
+        keyframe-snapped jump, no full decode from the start) and gives up
+        immediately rather than falling back through slower attempts - for
+        callers where a transient miss is fine because something else
+        (the storyboard cache) will have an answer a moment later, and
+        showing nothing now beats blocking on a slow decode."""
         if not os.path.exists(path):
             return None
 
@@ -336,8 +343,12 @@ class ThumbCache:
             attempts = []
             if pos > 0.05:
                 attempts.append(["ffmpeg", "-y", "-ss", f"{pos:.3f}", "-i", path])
-                attempts.append(["ffmpeg", "-y", "-i", path, "-ss", f"{pos:.3f}"])
-            attempts.append(["ffmpeg", "-y", "-i", path])
+            if not fast:
+                if pos > 0.05:
+                    attempts.append(["ffmpeg", "-y", "-i", path, "-ss", f"{pos:.3f}"])
+                attempts.append(["ffmpeg", "-y", "-i", path])
+            elif not attempts:
+                attempts.append(["ffmpeg", "-y", "-i", path])
 
             for head in attempts:
                 cmd = head + [
@@ -508,7 +519,23 @@ class ThumbCache:
         if sheet is not None:
             return self._board_crop(sheet, frac, cols, rows)
         self._board_build_async(path, duration, cols, rows, cell_w)
-        return self.frame(path, max(0.0, min(frac, 1.0)) * duration, cell_w)
+        # fast=True: one quick attempt, give up rather than fall back
+        # through slower extraction - a miss here is invisible (nothing
+        # painted this tick) whereas a slow fallback is exactly the drag
+        # behind the cursor this whole cache exists to avoid.
+        return self.frame(path, max(0.0, min(frac, 1.0)) * duration, cell_w, fast=True)
+
+    def prime_hover(self, path: str, duration: float, cols: int = BOARD_COLS,
+                     rows: int = BOARD_ROWS, cell_w: int = BOARD_CELL_W) -> None:
+        """Start building this clip's storyboard sheet now, without
+        waiting on it. Call this the moment a clip becomes the active one
+        in a player (not on every gallery card - that would be dozens of
+        concurrent ffmpeg passes) so the sheet is usually already done by
+        the time the user actually reaches for the seek bar, instead of
+        the first several seconds of scrubbing paying the slow per-hover
+        fallback while the sheet is still mid-build."""
+        if path and duration > 0 and self._board_cached(path, cols, rows, cell_w) is None:
+            self._board_build_async(path, duration, cols, rows, cell_w)
 
     def _board_build_async(self, path: str, duration: float,
                             cols: int, rows: int, cell_w: int) -> None:
